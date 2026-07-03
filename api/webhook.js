@@ -6,11 +6,12 @@ export default async function handler(req, res) {
   }
 
   if (!req.body || !req.body.update_id) {
-    return res.status(400).send('Invalid Telegram update');
+    console.log('Received non-Telegram POST request to webhook endpoint:', JSON.stringify(req.body));
+    return res.status(200).send('Webhook endpoint reached, but body is not a Telegram update.');
   }
 
   try {
-    console.log(`Received update ${req.body.update_id} from chat ${req.body.message?.chat?.id || 'unknown'}`);
+    console.log('TELEGRAM UPDATE RECEIVED:', JSON.stringify(req.body));
     // Process the incoming update from Telegram
     await bot.handleUpdate(req.body, res);
     // Ensure we don't hang if handleUpdate doesn't finish res
