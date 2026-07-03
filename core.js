@@ -55,15 +55,16 @@ function scheduleDeletion(ctx, messageIds, minutes) {
 
 // Consolidated AIO Scraper (shuffles/combines posts from all 8 sites)
 async function scrapeAIO(page = 1, filterType = 'latest') {
+  const limitPerSite = 3;
   const results = await Promise.all([
-    scrapeKamaClips(page).catch(() => []),
-    scrapeViralMms(page).catch(() => []),
-    scrapeDesiSexVdo(page).catch(() => []),
-    scrapeDesiBabe(page).catch(() => []),
-    scrapeDesiHub(page).catch(() => []),
-    scrapeDesiBF(page).catch(() => []),
-    scrapeDesiLeak49(page).catch(() => []),
-    scrapeMastiRaja(page).catch(() => [])
+    scrapeKamaClips(page, '', limitPerSite).catch(() => []),
+    scrapeViralMms(page, limitPerSite).catch(() => []),
+    scrapeDesiSexVdo(page, '', limitPerSite).catch(() => []),
+    scrapeDesiBabe(page, limitPerSite).catch(() => []),
+    scrapeDesiHub(page, limitPerSite).catch(() => []),
+    scrapeDesiBF(page, '', limitPerSite).catch(() => []),
+    scrapeDesiLeak49(page, '', limitPerSite).catch(() => []),
+    scrapeMastiRaja(page, '', limitPerSite).catch(() => [])
   ]);
 
   const mergedPosts = [];
@@ -81,12 +82,13 @@ async function scrapeAIO(page = 1, filterType = 'latest') {
 
 // Consolidated AIO Tag/Text Search Scraper (combines search results from the 5 searchable sites)
 async function searchAllSites(page = 1, query = '') {
+  const limitPerSite = 3;
   const results = await Promise.all([
-    scrapeKamaClips(page, query).catch(() => []),
-    scrapeDesiSexVdo(page, query).catch(() => []),
-    scrapeDesiBF(page, query).catch(() => []),
-    scrapeDesiLeak49(page, query).catch(() => []),
-    scrapeMastiRaja(page, query).catch(() => [])
+    scrapeKamaClips(page, query, limitPerSite).catch(() => []),
+    scrapeDesiSexVdo(page, query, limitPerSite).catch(() => []),
+    scrapeDesiBF(page, query, limitPerSite).catch(() => []),
+    scrapeDesiLeak49(page, query, limitPerSite).catch(() => []),
+    scrapeMastiRaja(page, query, limitPerSite).catch(() => [])
   ]);
 
   const mergedPosts = [];
