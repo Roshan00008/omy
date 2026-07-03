@@ -158,7 +158,7 @@ async function sendPageSelector(ctx, siteName, siteKey) {
 }
 
 // Builds inline keyboard controls for pagination under the last post of a batch
-function getPaginationKeyboard(siteKey, page, tag = '', queryId = '') {
+function getPaginationKeyboard(siteKey, page, tag = '', queryId = '', videoUrl = null) {
   let cleanSiteKey = siteKey.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/_$/, '');
   let prefix = `scrape_${cleanSiteKey}`;
   
@@ -170,6 +170,10 @@ function getPaginationKeyboard(siteKey, page, tag = '', queryId = '') {
   }
   
   const buttons = [];
+
+  if (videoUrl) {
+    buttons.push([Markup.button.url('🎥 Watch Direct Video', videoUrl)]);
+  }
 
   // Navigation row
   const navRow = [];
@@ -408,10 +412,19 @@ async function handleScrapeAction(ctx, siteName, page, scrapeFn, tag = '', query
 
       try {
         let msg = null;
-        if (post.thumbnail) {
-          msg = await ctx.replyWithPhoto(post.thumbnail, { caption, parse_mode: 'Markdown' }).catch(() => {});
-        } else {
-          msg = await ctx.replyWithMarkdown(caption).catch(() => {});
+        // Try native video first, then fallback to photo, then to text
+        try {
+          if (post.videoUrl) {
+            msg = await ctx.replyWithVideo(post.videoUrl, { caption, parse_mode: 'Markdown' });
+          } else {
+            throw new Error("No video url");
+          }
+        } catch (videoErr) {
+          if (post.thumbnail) {
+            msg = await ctx.replyWithPhoto(post.thumbnail, { caption, parse_mode: 'Markdown' }).catch(() => {});
+          } else {
+            msg = await ctx.replyWithMarkdown(caption).catch(() => {});
+          }
         }
         if (msg) sentMessageIds.push(msg.message_id);
       } catch (err) {
@@ -432,18 +445,30 @@ async function handleScrapeAction(ctx, siteName, page, scrapeFn, tag = '', query
       `\`${lastPost.videoUrl}\``;
 
     const siteKey = siteName.toLowerCase();
-    const paginationKeyboard = getPaginationKeyboard(siteKey, page, tag, queryId);
+    const paginationKeyboard = getPaginationKeyboard(siteKey, page, tag, queryId, lastPost.videoUrl);
 
     try {
       let msgLast = null;
-      if (lastPost.thumbnail) {
-        msgLast = await ctx.replyWithPhoto(lastPost.thumbnail, {
-          caption: lastCaption,
-          parse_mode: 'Markdown',
-          ...paginationKeyboard
-        }).catch(() => {});
-      } else {
-        msgLast = await ctx.replyWithMarkdown(lastCaption, paginationKeyboard).catch(() => {});
+      try {
+        if (lastPost.videoUrl) {
+          msgLast = await ctx.replyWithVideo(lastPost.videoUrl, {
+            caption: lastCaption,
+            parse_mode: 'Markdown',
+            ...paginationKeyboard
+          });
+        } else {
+          throw new Error("No video url");
+        }
+      } catch (videoErr) {
+        if (lastPost.thumbnail) {
+          msgLast = await ctx.replyWithPhoto(lastPost.thumbnail, {
+            caption: lastCaption,
+            parse_mode: 'Markdown',
+            ...paginationKeyboard
+          }).catch(() => {});
+        } else {
+          msgLast = await ctx.replyWithMarkdown(lastCaption, paginationKeyboard).catch(() => {});
+        }
       }
       if (msgLast) sentMessageIds.push(msgLast.message_id);
     } catch (err) {
@@ -482,7 +507,7 @@ async function handleScrapeAction(ctx, siteName, page, scrapeFn, tag = '', query
 }
 
 // Register generic page scraper action handler
-bot.action(/^scrape_(.+)_(.+)$/, async (ctx) => {
+bot.action(/^scrape_([a-z0-9_]+)_(\d+)$/, async (ctx) => {
   const siteKey = ctx.match[1];
   const page = parseInt(ctx.match[2], 10);
   
@@ -528,8 +553,10 @@ bot.action(/^scrape_(.+)_(.+)$/, async (ctx) => {
   }
 });
 
+const validSitesPattern = 'all|kamaclips|viralmms|desisexvdo|desibabe|desihub|desibf|desileak49|mastiraja|trending_all_in_one|popular_all_in_one';
+
 // Register generic tag search handler
-bot.action(/^search_(.+)_(.+)_(.+)$/, async (ctx) => {
+bot.action(new RegExp('^search_(' + validSitesPattern + ')_(.+)_(\\d+)$'), async (ctx) => {
   const siteKey = ctx.match[1];
   const tagKey = ctx.match[2];
   const page = parseInt(ctx.match[3], 10);
@@ -567,7 +594,7 @@ bot.action(/^search_(.+)_(.+)_(.+)$/, async (ctx) => {
 });
 
 // Register custom search callback query triggers
-bot.action(/^csearch_(.+)_(.+)_(.+)$/, async (ctx) => {
+bot.action(new RegExp('^csearch_(' + validSitesPattern + ')_(.+)_(\\d+)$'), async (ctx) => {
   const siteKey = ctx.match[1];
   const queryId = ctx.match[2];
   const page = parseInt(ctx.match[3], 10);
