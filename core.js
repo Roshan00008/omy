@@ -15,10 +15,9 @@ dotenv.config();
 
 if (!process.env.BOT_TOKEN) {
   console.error('Error: BOT_TOKEN is missing in the env configuration.');
-  process.exit(1);
 }
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const bot = new Telegraf(process.env.BOT_TOKEN || 'DUMMY_TOKEN');
 
 // Global error handler to prevent bot from crashing
 bot.catch((err, ctx) => {
