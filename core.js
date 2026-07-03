@@ -1,5 +1,6 @@
 import { Telegraf, Markup } from 'telegraf';
 import dotenv from 'dotenv';
+import axios from 'axios';
 import {
   scrapeKamaClips,
   scrapeViralMms,
@@ -38,6 +39,27 @@ const chatSettings = {};
 // Map to store custom query IDs to avoid exceeding Telegram's 64-byte callback query data limit
 const customQueries = {};
 let queryCounter = 0;
+
+// Map to store video URLs for download to bypass 64-byte limit
+const videoDownloadUrls = {};
+let videoIdCounter = 0;
+
+// Helper to store video URL and get short ID
+function getShortVideoId(url) {
+  if (!url) return null;
+  videoIdCounter++;
+  const id = `v${videoIdCounter}`;
+  videoDownloadUrls[id] = url;
+
+  // Prune map if too large
+  const keys = Object.keys(videoDownloadUrls);
+  if (keys.length > 10000) {
+    for (let i = 0; i < 2000; i++) {
+      delete videoDownloadUrls[keys[i]];
+    }
+  }
+  return id;
+}
 
 // Helper to schedule message deletion
 function scheduleDeletion(ctx, messageIds, minutes) {
@@ -172,7 +194,11 @@ function getPaginationKeyboard(siteKey, page, tag = '', queryId = '', videoUrl =
   const buttons = [];
 
   if (videoUrl) {
-    buttons.push([Markup.button.url('🎥 Watch Direct Video', videoUrl)]);
+    const shortId = getShortVideoId(videoUrl);
+    buttons.push([
+      Markup.button.url('🎥 Watch Direct Video', videoUrl),
+      Markup.button.callback('⬇️ Download to Telegram', `dl_${shortId}`)
+    ]);
   }
 
   // Navigation row
@@ -410,25 +436,51 @@ async function handleScrapeAction(ctx, siteName, page, scrapeFn, tag = '', query
         `📥 *Direct Video URL* (tap to copy):\n` +
         `\`${post.videoUrl}\``;
 
+      let keyboard = null;
+      if (post.videoUrl) {
+        const shortId = getShortVideoId(post.videoUrl);
+        keyboard = Markup.inlineKeyboard([
+          [
+            Markup.button.url('🎥 Watch Direct Video', post.videoUrl),
+            Markup.button.callback('⬇️ Download to Telegram', `dl_${shortId}`)
+          ]
+        ]);
+      }
+
+      const replyOptions = {
+        caption,
+        parse_mode: 'Markdown',
+        ...(keyboard ? keyboard : {})
+      };
+
       try {
         let msg = null;
         // Try native video first, then fallback to photo, then to text
         try {
           if (post.videoUrl) {
-            msg = await ctx.replyWithVideo(post.videoUrl, { caption, parse_mode: 'Markdown' });
+            msg = await ctx.replyWithVideo(post.videoUrl, replyOptions);
           } else {
             throw new Error("No video url");
           }
         } catch (videoErr) {
           if (post.thumbnail) {
-            msg = await ctx.replyWithPhoto(post.thumbnail, { caption, parse_mode: 'Markdown' }).catch(() => {});
+            msg = await ctx.replyWithPhoto(post.thumbnail, replyOptions).catch(() => {});
           } else {
-            msg = await ctx.replyWithMarkdown(caption).catch(() => {});
+            if (keyboard) {
+              msg = await ctx.replyWithMarkdown(caption, keyboard).catch(() => {});
+            } else {
+              msg = await ctx.replyWithMarkdown(caption).catch(() => {});
+            }
           }
         }
         if (msg) sentMessageIds.push(msg.message_id);
       } catch (err) {
-        const msg = await ctx.replyWithMarkdown(caption).catch(() => {});
+        let msg;
+        if (keyboard) {
+          msg = await ctx.replyWithMarkdown(caption, keyboard).catch(() => {});
+        } else {
+          msg = await ctx.replyWithMarkdown(caption).catch(() => {});
+        }
         if (msg) sentMessageIds.push(msg.message_id);
       }
     }
@@ -632,6 +684,45 @@ bot.action(new RegExp('^csearch_(' + validSitesPattern + ')_(.+)_(\\d+)$'), asyn
     await handleScrapeAction(ctx, siteName, page, scrapeFn, queryText, queryId);
   } else {
     await ctx.answerCbQuery('Invalid site selection.').catch(() => {});
+  }
+});
+
+bot.action(/^dl_(v\d+)$/, async (ctx) => {
+  const shortId = ctx.match[1];
+  const videoUrl = videoDownloadUrls[shortId];
+
+  if (!videoUrl) {
+    return ctx.answerCbQuery('Download link expired. Please search again.').catch(() => {});
+  }
+
+  await ctx.answerCbQuery('Downloading video to Telegram... This may take a minute.').catch(() => {});
+
+  const statusMsg = await ctx.replyWithMarkdown('⏳ _Downloading video..._').catch(() => {});
+
+  try {
+    const response = await axios({
+      method: 'GET',
+      url: videoUrl,
+      responseType: 'stream',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      }
+    });
+
+    await ctx.replyWithVideo({ source: response.data }, {
+      caption: '✅ *Video Downloaded Successfully*',
+      parse_mode: 'Markdown'
+    });
+
+    if (statusMsg) {
+      await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+    }
+  } catch (error) {
+    console.error('Error downloading video:', error);
+    if (statusMsg) {
+      await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+    }
+    await ctx.replyWithMarkdown('❌ Failed to download the video. The file might be too large or the server is blocking requests.').catch(() => {});
   }
 });
 
