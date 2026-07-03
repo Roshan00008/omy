@@ -81,7 +81,6 @@ async function scrapeKamaClips(page = 1, searchTerm = '') {
       }
     });
 
-    // Remove duplicates and limit to 10
     const uniquePosts = [];
     const urls = new Set();
     for (const post of posts) {
@@ -92,17 +91,13 @@ async function scrapeKamaClips(page = 1, searchTerm = '') {
       if (uniquePosts.length >= 10) break;
     }
 
-    // Resolve direct URLs in parallel
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
           const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
           const post$ = cheerio.load(postRes.data);
-
-          // 1. Try itemprop="contentURL"
           let videoUrl = post$('meta[itemprop="contentURL"]').attr('content');
 
-          // 2. Try iframe player-x.php?q= base64
           if (!videoUrl) {
             const iframeSrc = post$('iframe[src*="player-x.php"]').attr('src');
             if (iframeSrc) {
@@ -116,7 +111,6 @@ async function scrapeKamaClips(page = 1, searchTerm = '') {
             }
           }
 
-          // 3. Try standard source src
           if (!videoUrl) {
             videoUrl = post$('video source').attr('src');
           }
@@ -124,7 +118,6 @@ async function scrapeKamaClips(page = 1, searchTerm = '') {
           post.videoUrl = normalizeUrl(videoUrl, baseUrl);
           return post;
         } catch (err) {
-          console.error(`Error resolving KamaClips post ${post.url}:`, err.message);
           return post;
         }
       })
@@ -154,7 +147,6 @@ async function scrapeViralMms(page = 1) {
     const $ = cheerio.load(res.data);
     const posts = [];
 
-    // Parse next-js JSON-LD schema
     $('script[type="application/ld+json"]').each((_, el) => {
       try {
         const data = JSON.parse($(el).text());
@@ -177,7 +169,6 @@ async function scrapeViralMms(page = 1) {
       } catch (e) {}
     });
 
-    // Fallback if LD+JSON parsing failed
     if (posts.length === 0) {
       const pagePosts = [];
       $('a[href^="/post/"]').each((_, el) => {
@@ -379,7 +370,6 @@ async function scrapeDesiBabe(page = 1) {
       } catch (e) {}
     });
 
-    // Fallback parser if JSON-LD is missing
     if (posts.length === 0) {
       $('a[href^="/post/"]').each((_, el) => {
         const title = $(el).find('h3').text().trim() || $(el).attr('title') || $(el).text().trim();
@@ -448,14 +438,14 @@ async function scrapeDesiBabe(page = 1) {
 }
 
 /**
- * Scrapes Desihub.org
+ * Scrapes Desihub.to
  */
 async function scrapeDesiHub(page = 1) {
   const cacheKey = `desihub_${page}`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
-  const baseUrl = 'https://desihub.org';
+  const baseUrl = 'https://desihub.to';
   const url = page === 1 ? baseUrl : `${baseUrl}/page/${page}`;
   try {
     const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
@@ -548,10 +538,284 @@ async function scrapeDesiHub(page = 1) {
   }
 }
 
+/**
+ * Scrapes Desibf.com
+ */
+async function scrapeDesiBF(page = 1, searchTerm = '') {
+  const cacheKey = `desibf_${page}_${searchTerm || 'default'}`;
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
+
+  const baseUrl = 'https://desibf.com';
+  let url = '';
+  if (searchTerm) {
+    url = page === 1 
+      ? `${baseUrl}/?s=${encodeURIComponent(searchTerm)}` 
+      : `${baseUrl}/page/${page}/?s=${encodeURIComponent(searchTerm)}`;
+  } else {
+    url = page === 1 ? baseUrl : `${baseUrl}/page/${page}/`;
+  }
+
+  try {
+    const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const $ = cheerio.load(res.data);
+    const posts = [];
+
+    $('.thumb-block').each((_, el) => {
+      const title = $(el).attr('title') || $(el).find('.title').text().trim();
+      const href = $(el).attr('href') || $(el).find('a').attr('href');
+      const imgSrc = $(el).find('img.video-main-thumb').attr('src') || $(el).find('img.video-main-thumb').attr('data-src');
+
+      if (title && href) {
+        posts.push({
+          title,
+          url: normalizeUrl(href, baseUrl),
+          thumbnail: normalizeUrl(imgSrc, baseUrl)
+        });
+      }
+    });
+
+    const uniquePosts = [];
+    const urls = new Set();
+    for (const post of posts) {
+      if (!urls.has(post.url)) {
+        urls.add(post.url);
+        uniquePosts.push(post);
+      }
+      if (uniquePosts.length >= 10) break;
+    }
+
+    const resolvedPosts = await Promise.all(
+      uniquePosts.map(async (post) => {
+        try {
+          const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
+          const post$ = cheerio.load(postRes.data);
+          let videoUrl = post$('meta[itemprop="contentURL"]').attr('content');
+
+          if (!videoUrl) {
+            const iframeSrc = post$('iframe[src*="player-x.php"]').attr('src');
+            if (iframeSrc) {
+              const urlObj = new URL(iframeSrc);
+              const q = urlObj.searchParams.get('q');
+              if (q) {
+                const decoded = Buffer.from(q, 'base64').toString('utf8');
+                const match = decoded.match(/src=["'](https?:\/\/[^"']+)["']/);
+                if (match) videoUrl = match[1];
+              }
+            }
+          }
+
+          if (!videoUrl) {
+            videoUrl = post$('video source').attr('src') || post$('video').attr('src');
+          }
+
+          post.videoUrl = normalizeUrl(videoUrl, baseUrl);
+          return post;
+        } catch (err) {
+          return post;
+        }
+      })
+    );
+
+    const validPosts = resolvedPosts.filter(p => p.videoUrl);
+    setCached(cacheKey, validPosts);
+    return validPosts;
+  } catch (err) {
+    console.error(`Error scraping DesiBF (Page ${page}, Search: ${searchTerm}):`, err.message);
+    return [];
+  }
+}
+
+/**
+ * Scrapes Desileak49.com
+ */
+async function scrapeDesiLeak49(page = 1, searchTerm = '') {
+  const cacheKey = `desileak49_${page}_${searchTerm || 'default'}`;
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
+
+  const baseUrl = 'https://desileak49.com';
+  let url = '';
+  if (searchTerm) {
+    url = page === 1 
+      ? `${baseUrl}/search/?key=${encodeURIComponent(searchTerm)}` 
+      : `${baseUrl}/search/?key=${encodeURIComponent(searchTerm)}&page=${page}`;
+  } else {
+    url = page === 1 ? baseUrl : `${baseUrl}/?page=${page}`;
+  }
+
+  try {
+    const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const $ = cheerio.load(res.data);
+    const posts = [];
+
+    $('script[type="application/ld+json"]').each((_, el) => {
+      try {
+        const data = JSON.parse($(el).text());
+        const graph = data['@graph'] || (Array.isArray(data) ? data : [data]);
+        for (const node of graph) {
+          if (node['@type'] === 'ItemList' && node.itemListElement) {
+            for (const item of node.itemListElement) {
+              if (item.url && item.name) {
+                posts.push({
+                  title: item.name,
+                  url: normalizeUrl(item.url, baseUrl)
+                });
+              }
+            }
+          }
+        }
+      } catch (e) {}
+    });
+
+    if (posts.length === 0) {
+      $('a[href*="/video/"]').each((_, el) => {
+        const title = $(el).find('p').text().trim() || $(el).attr('title') || $(el).text().trim();
+        const href = $(el).attr('href');
+        if (title && href) {
+          posts.push({
+            title,
+            url: normalizeUrl(href, baseUrl)
+          });
+        }
+      });
+    }
+
+    const uniquePosts = [];
+    const urls = new Set();
+    for (const post of posts) {
+      if (!urls.has(post.url)) {
+        urls.add(post.url);
+        uniquePosts.push(post);
+      }
+      if (uniquePosts.length >= 10) break;
+    }
+
+    const resolvedPosts = await Promise.all(
+      uniquePosts.map(async (post) => {
+        try {
+          const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
+          const post$ = cheerio.load(postRes.data);
+          let videoUrl = post$('meta[property="og:video"]').attr('content');
+          let thumbnail = post$('meta[property="og:image"]').attr('content');
+
+          if (!videoUrl) {
+            videoUrl = post$('video source').attr('src') || post$('video').attr('src');
+          }
+
+          post.videoUrl = normalizeUrl(videoUrl, baseUrl);
+          post.thumbnail = normalizeUrl(thumbnail, baseUrl);
+          return post;
+        } catch (err) {
+          return post;
+        }
+      })
+    );
+
+    const validPosts = resolvedPosts.filter(p => p.videoUrl);
+    setCached(cacheKey, validPosts);
+    return validPosts;
+  } catch (err) {
+    console.error(`Error scraping DesiLeak49 (Page ${page}, Search: ${searchTerm}):`, err.message);
+    return [];
+  }
+}
+
+/**
+ * Scrapes Mastiraja.com
+ */
+async function scrapeMastiRaja(page = 1, searchTerm = '') {
+  const cacheKey = `mastiraja_${page}_${searchTerm || 'default'}`;
+  const cached = getCached(cacheKey);
+  if (cached) return cached;
+
+  const baseUrl = 'https://mastiraja.com';
+  let url = '';
+  if (searchTerm) {
+    url = page === 1 
+      ? `${baseUrl}/?s=${encodeURIComponent(searchTerm)}` 
+      : `${baseUrl}/page/${page}/?s=${encodeURIComponent(searchTerm)}`;
+  } else {
+    url = page === 1 ? baseUrl : `${baseUrl}/page/${page}/`;
+  }
+
+  try {
+    const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const $ = cheerio.load(res.data);
+    const posts = [];
+
+    $('.thumb-block').each((_, el) => {
+      const title = $(el).attr('title') || $(el).find('.title').text().trim() || $(el).find('a').attr('title');
+      const href = $(el).attr('href') || $(el).find('a').attr('href');
+      const imgSrc = $(el).find('img.video-main-thumb').attr('src') || $(el).find('img.video-main-thumb').attr('data-src');
+
+      if (title && href) {
+        posts.push({
+          title,
+          url: normalizeUrl(href, baseUrl),
+          thumbnail: normalizeUrl(imgSrc, baseUrl)
+        });
+      }
+    });
+
+    const uniquePosts = [];
+    const urls = new Set();
+    for (const post of posts) {
+      if (!urls.has(post.url)) {
+        urls.add(post.url);
+        uniquePosts.push(post);
+      }
+      if (uniquePosts.length >= 10) break;
+    }
+
+    const resolvedPosts = await Promise.all(
+      uniquePosts.map(async (post) => {
+        try {
+          const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
+          const post$ = cheerio.load(postRes.data);
+          let videoUrl = post$('meta[itemprop="contentURL"]').attr('content');
+
+          if (!videoUrl) {
+            const iframeSrc = post$('iframe[src*="player-x.php"]').attr('src');
+            if (iframeSrc) {
+              const urlObj = new URL(iframeSrc);
+              const q = urlObj.searchParams.get('q');
+              if (q) {
+                const decoded = Buffer.from(q, 'base64').toString('utf8');
+                const match = decoded.match(/src=["'](https?:\/\/[^"']+)["']/);
+                if (match) videoUrl = match[1];
+              }
+            }
+          }
+
+          if (!videoUrl) {
+            videoUrl = post$('video source').attr('src') || post$('video').attr('src');
+          }
+
+          post.videoUrl = normalizeUrl(videoUrl, baseUrl);
+          return post;
+        } catch (err) {
+          return post;
+        }
+      })
+    );
+
+    const validPosts = resolvedPosts.filter(p => p.videoUrl);
+    setCached(cacheKey, validPosts);
+    return validPosts;
+  } catch (err) {
+    console.error(`Error scraping MastiRaja (Page ${page}, Search: ${searchTerm}):`, err.message);
+    return [];
+  }
+}
+
 export {
   scrapeKamaClips,
   scrapeViralMms,
   scrapeDesiSexVdo,
   scrapeDesiBabe,
-  scrapeDesiHub
+  scrapeDesiHub,
+  scrapeDesiBF,
+  scrapeDesiLeak49,
+  scrapeMastiRaja
 };

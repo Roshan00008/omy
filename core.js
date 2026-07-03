@@ -5,7 +5,10 @@ import {
   scrapeViralMms,
   scrapeDesiSexVdo,
   scrapeDesiBabe,
-  scrapeDesiHub
+  scrapeDesiHub,
+  scrapeDesiBF,
+  scrapeDesiLeak49,
+  scrapeMastiRaja
 } from './scraper.js';
 
 dotenv.config();
@@ -29,7 +32,7 @@ const TAG_LABELS = {
   young: 'Young'
 };
 
-// In-memory store for chat settings
+// In-memory store for chat settings (default to 15 minutes auto-delete)
 const chatSettings = {};
 
 // Map to store custom query IDs to avoid exceeding Telegram's 64-byte callback query data limit
@@ -60,7 +63,8 @@ function getMainMenu(chatId) {
   return Markup.inlineKeyboard([
     [Markup.button.callback('KamaClips 🔞', 'site_kamaclips'), Markup.button.callback('ViralMMS 🎬', 'site_viralmms')],
     [Markup.button.callback('DesiSexVdo 🎥', 'site_desisexvdo'), Markup.button.callback('DesiBabe 🍑', 'site_desibabe')],
-    [Markup.button.callback('DesiHub 🇮🇳', 'site_desihub')],
+    [Markup.button.callback('DesiHub 🇮🇳', 'site_desihub'), Markup.button.callback('DesiBF 💋', 'site_desibf')],
+    [Markup.button.callback('DesiLeak49 💦', 'site_desileak49'), Markup.button.callback('MastiRaja 🍿', 'site_mastiraja')],
     // Predefined Tags Row directly on the front menu
     [Markup.button.callback('Tamil 🇮🇳', 'tag_tamil'), Markup.button.callback('Mallu 🥥', 'tag_mallu')],
     [Markup.button.callback('South Indian 🌴', 'tag_south_indian'), Markup.button.callback('Young 👧', 'tag_young')],
@@ -143,7 +147,7 @@ bot.help((ctx) => {
   const helpText = `📖 *Usage Instructions*:\n\n` +
     `1. Click on any site button to open the page selector.\n` +
     `2. Select a quick tag directly from the front menu.\n` +
-    `3. Or, **type any search word** (e.g. \`bhabhi\`) and send it to search KamaClips and DesiSexVdo!\n` +
+    `3. Or, **type any search word** (e.g. \`bhabhi\`) and send it to search the supported sites!\n` +
     `4. Toggle the **Auto-Delete Timer** between Off, 15 Min, or 30 Min to automatically wipe media from the chat.\n` +
     `5. At the bottom of the last post, use pagination controls to scroll pages.\n\n` +
     `Use /start to open the main menu.`;
@@ -155,7 +159,7 @@ bot.action('help', async (ctx) => {
   const helpText = `📖 *Usage Instructions*:\n\n` +
     `1. Click on any site button to open the page selector.\n` +
     `2. Select a quick tag directly from the front menu.\n` +
-    `3. Or, **type any search word** (e.g. \`bhabhi\`) and send it to search KamaClips and DesiSexVdo!\n` +
+    `3. Or, **type any search word** (e.g. \`bhabhi\`) and send it to search the supported sites!\n` +
     `4. Toggle the **Auto-Delete Timer** between Off, 15 Min, or 30 Min to automatically wipe media from the chat.\n` +
     `5. At the bottom of the last post, use pagination controls to scroll pages.\n\n` +
     `Use /start to open the main menu.`;
@@ -213,17 +217,27 @@ bot.action('site_viralmms', (ctx) => sendPageSelector(ctx, 'ViralMMS', 'viralmms
 bot.action('site_desisexvdo', (ctx) => sendPageSelector(ctx, 'DesiSexVdo', 'desisexvdo'));
 bot.action('site_desibabe', (ctx) => sendPageSelector(ctx, 'DesiBabe', 'desibabe'));
 bot.action('site_desihub', (ctx) => sendPageSelector(ctx, 'DesiHub', 'desihub'));
+bot.action('site_desibf', (ctx) => sendPageSelector(ctx, 'DesiBF', 'desibf'));
+bot.action('site_desileak49', (ctx) => sendPageSelector(ctx, 'DesiLeak49', 'desileak49'));
+bot.action('site_mastiraja', (ctx) => sendPageSelector(ctx, 'MastiRaja', 'mastiraja'));
 
 bot.action(/^tag_(.+)$/, async (ctx) => {
   const tagKey = ctx.match[1];
   const tagLabel = TAG_LABELS[tagKey] || tagKey;
   await ctx.answerCbQuery().catch(() => {});
 
-  const text = `🔍 *Search Tag: ${tagLabel}*\n\nSelect which site you want to search for *"${tagLabel}"*:\n_(Note: Next.js sites do not support server-side tag search)_`;
+  const text = `🔍 *Search Tag: ${tagLabel}*\n\nSelect which site you want to search for *"${tagLabel}"*:`;
   const keyboard = Markup.inlineKeyboard([
     [
       Markup.button.callback('KamaClips 🔞', `search_kamaclips_${tagKey}_1`),
       Markup.button.callback('DesiSexVdo 🎥', `search_desisexvdo_${tagKey}_1`)
+    ],
+    [
+      Markup.button.callback('DesiBF 💋', `search_desibf_${tagKey}_1`),
+      Markup.button.callback('DesiLeak49 💦', `search_desileak49_${tagKey}_1`)
+    ],
+    [
+      Markup.button.callback('MastiRaja 🍿', `search_mastiraja_${tagKey}_1`)
     ],
     [Markup.button.callback('🔙 Back to Main Menu', 'back_to_main')]
   ]);
@@ -265,6 +279,13 @@ bot.on('text', async (ctx) => {
     [
       Markup.button.callback('KamaClips 🔞', `csearch_kamaclips_${queryId}_1`),
       Markup.button.callback('DesiSexVdo 🎥', `csearch_desisexvdo_${queryId}_1`)
+    ],
+    [
+      Markup.button.callback('DesiBF 💋', `csearch_desibf_${queryId}_1`),
+      Markup.button.callback('DesiLeak49 💦', `csearch_desileak49_${queryId}_1`)
+    ],
+    [
+      Markup.button.callback('MastiRaja 🍿', `csearch_mastiraja_${queryId}_1`)
     ],
     [Markup.button.callback('🔙 Back to Main Menu', 'back_to_main')]
   ]);
@@ -420,6 +441,15 @@ bot.action(/^scrape_(.+)_(.+)$/, async (ctx) => {
   } else if (siteKey === 'desihub') {
     siteName = 'DesiHub';
     scrapeFn = scrapeDesiHub;
+  } else if (siteKey === 'desibf') {
+    siteName = 'DesiBF';
+    scrapeFn = scrapeDesiBF;
+  } else if (siteKey === 'desileak49') {
+    siteName = 'DesiLeak49';
+    scrapeFn = scrapeDesiLeak49;
+  } else if (siteKey === 'mastiraja') {
+    siteName = 'MastiRaja';
+    scrapeFn = scrapeMastiRaja;
   }
 
   if (scrapeFn) {
@@ -444,6 +474,15 @@ bot.action(/^search_(.+)_(.+)_(.+)$/, async (ctx) => {
   } else if (siteKey === 'desisexvdo') {
     siteName = 'DesiSexVdo';
     scrapeFn = scrapeDesiSexVdo;
+  } else if (siteKey === 'desibf') {
+    siteName = 'DesiBF';
+    scrapeFn = scrapeDesiBF;
+  } else if (siteKey === 'desileak49') {
+    siteName = 'DesiLeak49';
+    scrapeFn = scrapeDesiLeak49;
+  } else if (siteKey === 'mastiraja') {
+    siteName = 'MastiRaja';
+    scrapeFn = scrapeMastiRaja;
   }
 
   const tagLabel = TAG_LABELS[tagKey] || tagKey;
@@ -476,6 +515,15 @@ bot.action(/^csearch_(.+)_(.+)_(.+)$/, async (ctx) => {
   } else if (siteKey === 'desisexvdo') {
     siteName = 'DesiSexVdo';
     scrapeFn = scrapeDesiSexVdo;
+  } else if (siteKey === 'desibf') {
+    siteName = 'DesiBF';
+    scrapeFn = scrapeDesiBF;
+  } else if (siteKey === 'desileak49') {
+    siteName = 'DesiLeak49';
+    scrapeFn = scrapeDesiLeak49;
+  } else if (siteKey === 'mastiraja') {
+    siteName = 'MastiRaja';
+    scrapeFn = scrapeMastiRaja;
   }
 
   if (scrapeFn) {
