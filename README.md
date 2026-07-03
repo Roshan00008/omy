@@ -45,6 +45,39 @@ If your token is `123:abc` and your Vercel domain is `omy-seven.vercel.app`, the
    npm start
    ```
 
+## Running in Termux
+
+To run this bot on an Android device using Termux:
+
+1. **Install Termux** from F-Droid.
+2. **Update packages**:
+   ```bash
+   pkg update && pkg upgrade
+   ```
+3. **Install Node.js and Git**:
+   ```bash
+   pkg install nodejs git
+   ```
+4. **Clone the repository**:
+   ```bash
+   git clone <YOUR_REPO_URL>
+   cd <REPO_NAME>
+   ```
+5. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+6. **Set your BOT_TOKEN**:
+   ```bash
+   nano .env
+   # Add: BOT_TOKEN=your_token_here
+   # Press Ctrl+O, Enter to save, then Ctrl+X to exit.
+   ```
+7. **Start the bot**:
+   ```bash
+   npm start
+   ```
+
 ## Testing
 
 Run the scraper tests to verify site connectivity:
