@@ -75,6 +75,19 @@ function scheduleDeletion(ctx, messageIds, minutes) {
   }, minutes * 60 * 1000);
 }
 
+// Helper to merge array results
+function mergeResults(results, maxPerSite = 2) {
+  const mergedPosts = [];
+  for (let i = 0; i < maxPerSite; i++) {
+    for (const siteResults of results) {
+      if (siteResults[i]) {
+        mergedPosts.push(siteResults[i]);
+      }
+    }
+  }
+  return mergedPosts;
+}
+
 // Consolidated AIO Scraper (shuffles/combines posts from all 8 sites)
 async function scrapeAIO(page = 1, filterType = 'latest') {
   const limitPerSite = 3;
@@ -89,15 +102,7 @@ async function scrapeAIO(page = 1, filterType = 'latest') {
     scrapeMastiRaja(page, '', limitPerSite).catch(() => [])
   ]);
 
-  const mergedPosts = [];
-  const maxPerSite = 2;
-  for (let i = 0; i < maxPerSite; i++) {
-    for (const siteResults of results) {
-      if (siteResults[i]) {
-        mergedPosts.push(siteResults[i]);
-      }
-    }
-  }
+  const mergedPosts = mergeResults(results);
 
   return mergedPosts.slice(0, 10);
 }
@@ -113,15 +118,7 @@ async function searchAllSites(page = 1, query = '') {
     scrapeMastiRaja(page, query, limitPerSite).catch(() => [])
   ]);
 
-  const mergedPosts = [];
-  const maxPerSite = 2;
-  for (let i = 0; i < maxPerSite; i++) {
-    for (const siteResults of results) {
-      if (siteResults[i]) {
-        mergedPosts.push(siteResults[i]);
-      }
-    }
-  }
+  const mergedPosts = mergeResults(results);
 
   return mergedPosts.slice(0, 10);
 }
