@@ -33,16 +33,26 @@ const TAG_LABELS = {
   young: 'Young'
 };
 
+const HELP_TEXT = `📖 *Usage Instructions*:\n\n` +
+  `1. Click on any site button to open the page selector.\n` +
+  `2. Select a quick tag directly from the front menu.\n` +
+  `3. Or, **type any search word** (e.g. \`bhabhi\`) and send it to search the supported sites!\n` +
+  `4. Toggle the **Auto-Delete Timer** between Off, 15 Min, or 30 Min to automatically wipe media from the chat.\n` +
+  `5. At the bottom of the last post, use pagination controls to scroll pages.\n\n` +
+  `Use /start to open the main menu.`;
+
 // In-memory store for chat settings (default to 15 minutes auto-delete)
 const chatSettings = {};
 
 // Map to store custom query IDs to avoid exceeding Telegram's 64-byte callback query data limit
 const customQueries = {};
 let queryCounter = 0;
+let customQueriesSize = 0;
 
 // Map to store video URLs for download to bypass 64-byte limit
-const videoDownloadUrls = {};
+const videoDownloadUrls = new Map();
 let videoIdCounter = 0;
+let videoDownloadUrlsSize = 0;
 
 // Helper to store video URL and get short ID
 function getShortVideoId(url) {
@@ -50,12 +60,16 @@ function getShortVideoId(url) {
   videoIdCounter++;
   const id = `v${videoIdCounter}`;
   videoDownloadUrls[id] = url;
+  videoDownloadUrlsSize++;
 
   // Prune map if too large
-  const keys = Object.keys(videoDownloadUrls);
-  if (keys.length > 10000) {
+  if (videoDownloadUrlsSize > 10000) {
+    const keys = Object.keys(videoDownloadUrls);
     for (let i = 0; i < 2000; i++) {
-      delete videoDownloadUrls[keys[i]];
+      if (keys[i] && videoDownloadUrls[keys[i]]) {
+        delete videoDownloadUrls[keys[i]];
+        videoDownloadUrlsSize--;
+      }
     }
   }
   return id;
@@ -65,13 +79,9 @@ function getShortVideoId(url) {
 function scheduleDeletion(ctx, messageIds, minutes) {
   if (!minutes || minutes <= 0) return;
   setTimeout(async () => {
-    for (const msgId of messageIds) {
-      try {
-        await ctx.telegram.deleteMessage(ctx.chat.id, msgId);
-      } catch (e) {
-        // Safe catch if user deleted the message manually
-      }
-    }
+    await Promise.allSettled(
+      messageIds.map((msgId) => ctx.telegram.deleteMessage(ctx.chat.id, msgId))
+    );
   }, minutes * 60 * 1000);
 }
 
@@ -89,15 +99,7 @@ async function scrapeAIO(page = 1, filterType = 'latest') {
     scrapeMastiRaja(page, '', limitPerSite).catch(() => [])
   ]);
 
-  const mergedPosts = [];
-  const maxPerSite = 2;
-  for (let i = 0; i < maxPerSite; i++) {
-    for (const siteResults of results) {
-      if (siteResults[i]) {
-        mergedPosts.push(siteResults[i]);
-      }
-    }
-  }
+  const mergedPosts = mergeResults(results);
 
   return mergedPosts.slice(0, 10);
 }
@@ -113,15 +115,7 @@ async function searchAllSites(page = 1, query = '') {
     scrapeMastiRaja(page, query, limitPerSite).catch(() => [])
   ]);
 
-  const mergedPosts = [];
-  const maxPerSite = 2;
-  for (let i = 0; i < maxPerSite; i++) {
-    for (const siteResults of results) {
-      if (siteResults[i]) {
-        mergedPosts.push(siteResults[i]);
-      }
-    }
-  }
+  const mergedPosts = mergeResults(results);
 
   return mergedPosts.slice(0, 10);
 }
@@ -233,26 +227,12 @@ bot.start((ctx) => {
 });
 
 bot.help((ctx) => {
-  const helpText = `📖 *Usage Instructions*:\n\n` +
-    `1. Click on any site button to open the page selector.\n` +
-    `2. Select a quick tag directly from the front menu.\n` +
-    `3. Or, **type any search word** (e.g. \`bhabhi\`) and send it to search the supported sites!\n` +
-    `4. Toggle the **Auto-Delete Timer** between Off, 15 Min, or 30 Min to automatically wipe media from the chat.\n` +
-    `5. At the bottom of the last post, use pagination controls to scroll pages.\n\n` +
-    `Use /start to open the main menu.`;
-  ctx.replyWithMarkdown(helpText, getMainMenu(ctx.chat.id)).catch(() => {});
+  ctx.replyWithMarkdown(HELP_TEXT, getMainMenu(ctx.chat.id)).catch(() => {});
 });
 
 bot.action('help', async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
-  const helpText = `📖 *Usage Instructions*:\n\n` +
-    `1. Click on any site button to open the page selector.\n` +
-    `2. Select a quick tag directly from the front menu.\n` +
-    `3. Or, **type any search word** (e.g. \`bhabhi\`) and send it to search the supported sites!\n` +
-    `4. Toggle the **Auto-Delete Timer** between Off, 15 Min, or 30 Min to automatically wipe media from the chat.\n` +
-    `5. At the bottom of the last post, use pagination controls to scroll pages.\n\n` +
-    `Use /start to open the main menu.`;
-  await ctx.editMessageText(helpText, {
+  await ctx.editMessageText(HELP_TEXT, {
     parse_mode: 'Markdown',
     ...getMainMenu(ctx.chat.id)
   }).catch(() => {});
@@ -355,12 +335,16 @@ bot.on('text', async (ctx) => {
   queryCounter++;
   const queryId = `q${queryCounter}`;
   customQueries[queryId] = text;
+  customQueriesSize++;
 
   // Prune map if too large
-  if (queryCounter > 5000) {
+  if (customQueriesSize > 5000) {
     const keys = Object.keys(customQueries);
     for (let i = 0; i < 1000; i++) {
-      delete customQueries[keys[i]];
+      if (keys[i] && customQueries[keys[i]]) {
+        delete customQueries[keys[i]];
+        customQueriesSize--;
+      }
     }
   }
 
@@ -689,7 +673,7 @@ bot.action(new RegExp('^csearch_(' + validSitesPattern + ')_(.+)_(\\d+)$'), asyn
 
 bot.action(/^dl_(v\d+)$/, async (ctx) => {
   const shortId = ctx.match[1];
-  const videoUrl = videoDownloadUrls[shortId];
+  const videoUrl = videoDownloadUrls.get(shortId);
 
   if (!videoUrl) {
     return ctx.answerCbQuery('Download link expired. Please search again.').catch(() => {});
@@ -728,4 +712,4 @@ bot.action(/^dl_(v\d+)$/, async (ctx) => {
 
 bot.action('noop', (ctx) => ctx.answerCbQuery().catch(() => {}));
 
-export { bot, customQueries };
+export { bot, customQueries, getShortVideoId, videoDownloadUrls };
