@@ -59,15 +59,15 @@ function getShortVideoId(url) {
   if (!url) return null;
   videoIdCounter++;
   const id = `v${videoIdCounter}`;
-  videoDownloadUrls[id] = url;
+  videoDownloadUrls.set(id, url);
   videoDownloadUrlsSize++;
 
   // Prune map if too large
   if (videoDownloadUrlsSize > 10000) {
-    const keys = Object.keys(videoDownloadUrls);
+    const keys = Array.from(videoDownloadUrls.keys());
     for (let i = 0; i < 2000; i++) {
-      if (keys[i] && videoDownloadUrls[keys[i]]) {
-        delete videoDownloadUrls[keys[i]];
+      if (keys[i] && videoDownloadUrls.has(keys[i])) {
+        videoDownloadUrls.delete(keys[i]);
         videoDownloadUrlsSize--;
       }
     }
@@ -83,6 +83,11 @@ function scheduleDeletion(ctx, messageIds, minutes) {
       messageIds.map((msgId) => ctx.telegram.deleteMessage(ctx.chat.id, msgId))
     );
   }, minutes * 60 * 1000);
+}
+
+// Helper to merge and shuffle results from multiple scrapers
+function mergeResults(resultsArray) {
+  return [].concat(...resultsArray).filter(Boolean).sort(() => Math.random() - 0.5);
 }
 
 // Consolidated AIO Scraper (shuffles/combines posts from all 8 sites)
