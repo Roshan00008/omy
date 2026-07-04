@@ -842,5 +842,9 @@ export {
   scrapeDesiHub,
   scrapeDesiBF,
   scrapeDesiLeak49,
-  scrapeMastiRaja
+  scrapeMastiRaja,
+  getCached,
+  setCached,
+  cache,
+  CACHE_TTL
 };
