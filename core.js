@@ -39,10 +39,12 @@ const chatSettings = {};
 // Map to store custom query IDs to avoid exceeding Telegram's 64-byte callback query data limit
 const customQueries = {};
 let queryCounter = 0;
+let customQueriesSize = 0;
 
 // Map to store video URLs for download to bypass 64-byte limit
 const videoDownloadUrls = {};
 let videoIdCounter = 0;
+let videoDownloadUrlsSize = 0;
 
 // Helper to store video URL and get short ID
 function getShortVideoId(url) {
@@ -50,12 +52,16 @@ function getShortVideoId(url) {
   videoIdCounter++;
   const id = `v${videoIdCounter}`;
   videoDownloadUrls[id] = url;
+  videoDownloadUrlsSize++;
 
   // Prune map if too large
-  const keys = Object.keys(videoDownloadUrls);
-  if (keys.length > 10000) {
+  if (videoDownloadUrlsSize > 10000) {
+    const keys = Object.keys(videoDownloadUrls);
     for (let i = 0; i < 2000; i++) {
-      delete videoDownloadUrls[keys[i]];
+      if (keys[i] && videoDownloadUrls[keys[i]]) {
+        delete videoDownloadUrls[keys[i]];
+        videoDownloadUrlsSize--;
+      }
     }
   }
   return id;
@@ -355,12 +361,16 @@ bot.on('text', async (ctx) => {
   queryCounter++;
   const queryId = `q${queryCounter}`;
   customQueries[queryId] = text;
+  customQueriesSize++;
 
   // Prune map if too large
-  if (queryCounter > 5000) {
+  if (customQueriesSize > 5000) {
     const keys = Object.keys(customQueries);
     for (let i = 0; i < 1000; i++) {
-      delete customQueries[keys[i]];
+      if (keys[i] && customQueries[keys[i]]) {
+        delete customQueries[keys[i]];
+        customQueriesSize--;
+      }
     }
   }
 
