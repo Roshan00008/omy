@@ -224,6 +224,7 @@ async function scrapeViralMms(page = 1, limit = 10) {
                   if (node['@type'] === 'VideoObject') {
                     videoUrl = node.contentUrl;
                     thumbnail = node.thumbnailUrl;
+                    break;
                   }
                 }
               } catch (e) {}
@@ -321,6 +322,7 @@ async function scrapeDesiSexVdo(page = 1, searchTerm = '', limit = 10) {
                 if (node['@type'] === 'VideoObject') {
                   videoUrl = node.contentUrl;
                   thumbnail = node.thumbnailUrl;
+                  break;
                 }
               }
             } catch (e) {}
@@ -428,6 +430,7 @@ async function scrapeDesiBabe(page = 1, limit = 10) {
                 if (node['@type'] === 'VideoObject') {
                   videoUrl = node.contentUrl;
                   thumbnail = node.thumbnailUrl;
+                  break;
                 }
               }
             } catch (e) {}
@@ -531,6 +534,7 @@ async function scrapeDesiHub(page = 1, limit = 10) {
                 if (node['@type'] === 'VideoObject') {
                   videoUrl = node.contentUrl;
                   thumbnail = node.thumbnailUrl;
+                  break;
                 }
               }
             } catch (e) {}
