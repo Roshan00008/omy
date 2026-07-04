@@ -728,4 +728,4 @@ bot.action(/^dl_(v\d+)$/, async (ctx) => {
 
 bot.action('noop', (ctx) => ctx.answerCbQuery().catch(() => {}));
 
-export { bot, customQueries };
+export { bot, customQueries, getShortVideoId, videoDownloadUrls };
