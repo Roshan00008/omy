@@ -95,15 +95,7 @@ async function scrapeAIO(page = 1, filterType = 'latest') {
     scrapeMastiRaja(page, '', limitPerSite).catch(() => [])
   ]);
 
-  const mergedPosts = [];
-  const maxPerSite = 2;
-  for (let i = 0; i < maxPerSite; i++) {
-    for (const siteResults of results) {
-      if (siteResults[i]) {
-        mergedPosts.push(siteResults[i]);
-      }
-    }
-  }
+  const mergedPosts = mergeResults(results);
 
   return mergedPosts.slice(0, 10);
 }
@@ -119,15 +111,7 @@ async function searchAllSites(page = 1, query = '') {
     scrapeMastiRaja(page, query, limitPerSite).catch(() => [])
   ]);
 
-  const mergedPosts = [];
-  const maxPerSite = 2;
-  for (let i = 0; i < maxPerSite; i++) {
-    for (const siteResults of results) {
-      if (siteResults[i]) {
-        mergedPosts.push(siteResults[i]);
-      }
-    }
-  }
+  const mergedPosts = mergeResults(results);
 
   return mergedPosts.slice(0, 10);
 }
