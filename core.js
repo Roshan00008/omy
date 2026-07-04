@@ -1,5 +1,6 @@
 import { Telegraf, Markup } from 'telegraf';
 import dotenv from 'dotenv';
+import axios from 'axios';
 import {
   scrapeKamaClips,
   scrapeViralMms,
@@ -32,6 +33,14 @@ const TAG_LABELS = {
   young: 'Young'
 };
 
+const HELP_TEXT = `📖 *Usage Instructions*:\n\n` +
+  `1. Click on any site button to open the page selector.\n` +
+  `2. Select a quick tag directly from the front menu.\n` +
+  `3. Or, **type any search word** (e.g. \`bhabhi\`) and send it to search the supported sites!\n` +
+  `4. Toggle the **Auto-Delete Timer** between Off, 15 Min, or 30 Min to automatically wipe media from the chat.\n` +
+  `5. At the bottom of the last post, use pagination controls to scroll pages.\n\n` +
+  `Use /start to open the main menu.`;
+
 // In-memory store for chat settings (default to 15 minutes auto-delete)
 const chatSettings = {};
 
@@ -39,35 +48,42 @@ const chatSettings = {};
 const customQueries = {};
 let queryCounter = 0;
 
+// Map to store video URLs for download to bypass 64-byte limit
+const videoDownloadUrls = new Map();
+let videoIdCounter = 0;
+
+// Helper to store video URL and get short ID
+function getShortVideoId(url) {
+  if (!url) return null;
+  videoIdCounter++;
+  const id = `v${videoIdCounter}`;
+  videoDownloadUrls.set(id, url);
+
+  // Prune map if too large
+  if (videoDownloadUrls.size > 10000) {
+    let count = 0;
+    for (const key of videoDownloadUrls.keys()) {
+      if (count >= 2000) break;
+      videoDownloadUrls.delete(key);
+      count++;
+    }
+  }
+  return id;
+}
+
 // Helper to schedule message deletion
 function scheduleDeletion(ctx, messageIds, minutes) {
   if (!minutes || minutes <= 0) return;
   setTimeout(async () => {
-    for (const msgId of messageIds) {
-      try {
-        await ctx.telegram.deleteMessage(ctx.chat.id, msgId);
-      } catch (e) {
-        // Safe catch if user deleted the message manually
-      }
-    }
+    await Promise.allSettled(
+      messageIds.map((msgId) => ctx.telegram.deleteMessage(ctx.chat.id, msgId))
+    );
   }, minutes * 60 * 1000);
 }
 
-// Consolidated AIO Scraper (shuffles/combines posts from all 8 sites)
-async function scrapeAIO(page = 1, filterType = 'latest') {
-  const results = await Promise.all([
-    scrapeKamaClips(page).catch(() => []),
-    scrapeViralMms(page).catch(() => []),
-    scrapeDesiSexVdo(page).catch(() => []),
-    scrapeDesiBabe(page).catch(() => []),
-    scrapeDesiHub(page).catch(() => []),
-    scrapeDesiBF(page).catch(() => []),
-    scrapeDesiLeak49(page).catch(() => []),
-    scrapeMastiRaja(page).catch(() => [])
-  ]);
-
+// Helper to merge array results
+function mergeResults(results, maxPerSite = 2) {
   const mergedPosts = [];
-  const maxPerSite = 2;
   for (let i = 0; i < maxPerSite; i++) {
     for (const siteResults of results) {
       if (siteResults[i]) {
@@ -75,29 +91,40 @@ async function scrapeAIO(page = 1, filterType = 'latest') {
       }
     }
   }
+  return mergedPosts;
+}
+
+// Consolidated AIO Scraper (shuffles/combines posts from all 8 sites)
+async function scrapeAIO(page = 1, filterType = 'latest') {
+  const limitPerSite = 3;
+  const results = await Promise.all([
+    scrapeKamaClips(page, '', limitPerSite).catch(() => []),
+    scrapeViralMms(page, limitPerSite).catch(() => []),
+    scrapeDesiSexVdo(page, '', limitPerSite).catch(() => []),
+    scrapeDesiBabe(page, limitPerSite).catch(() => []),
+    scrapeDesiHub(page, limitPerSite).catch(() => []),
+    scrapeDesiBF(page, '', limitPerSite).catch(() => []),
+    scrapeDesiLeak49(page, '', limitPerSite).catch(() => []),
+    scrapeMastiRaja(page, '', limitPerSite).catch(() => [])
+  ]);
+
+  const mergedPosts = mergeResults(results);
 
   return mergedPosts.slice(0, 10);
 }
 
 // Consolidated AIO Tag/Text Search Scraper (combines search results from the 5 searchable sites)
 async function searchAllSites(page = 1, query = '') {
+  const limitPerSite = 3;
   const results = await Promise.all([
-    scrapeKamaClips(page, query).catch(() => []),
-    scrapeDesiSexVdo(page, query).catch(() => []),
-    scrapeDesiBF(page, query).catch(() => []),
-    scrapeDesiLeak49(page, query).catch(() => []),
-    scrapeMastiRaja(page, query).catch(() => [])
+    scrapeKamaClips(page, query, limitPerSite).catch(() => []),
+    scrapeDesiSexVdo(page, query, limitPerSite).catch(() => []),
+    scrapeDesiBF(page, query, limitPerSite).catch(() => []),
+    scrapeDesiLeak49(page, query, limitPerSite).catch(() => []),
+    scrapeMastiRaja(page, query, limitPerSite).catch(() => [])
   ]);
 
-  const mergedPosts = [];
-  const maxPerSite = 2;
-  for (let i = 0; i < maxPerSite; i++) {
-    for (const siteResults of results) {
-      if (siteResults[i]) {
-        mergedPosts.push(siteResults[i]);
-      }
-    }
-  }
+  const mergedPosts = mergeResults(results);
 
   return mergedPosts.slice(0, 10);
 }
@@ -156,7 +183,7 @@ async function sendPageSelector(ctx, siteName, siteKey) {
 }
 
 // Builds inline keyboard controls for pagination under the last post of a batch
-function getPaginationKeyboard(siteKey, page, tag = '', queryId = '') {
+function getPaginationKeyboard(siteKey, page, tag = '', queryId = '', videoUrl = null) {
   let cleanSiteKey = siteKey.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/_$/, '');
   let prefix = `scrape_${cleanSiteKey}`;
   
@@ -168,6 +195,14 @@ function getPaginationKeyboard(siteKey, page, tag = '', queryId = '') {
   }
   
   const buttons = [];
+
+  if (videoUrl) {
+    const shortId = getShortVideoId(videoUrl);
+    buttons.push([
+      Markup.button.url('🎥 Watch Direct Video', videoUrl),
+      Markup.button.callback('⬇️ Download to Telegram', `dl_${shortId}`)
+    ]);
+  }
 
   // Navigation row
   const navRow = [];
@@ -201,26 +236,12 @@ bot.start((ctx) => {
 });
 
 bot.help((ctx) => {
-  const helpText = `📖 *Usage Instructions*:\n\n` +
-    `1. Click on any site button to open the page selector.\n` +
-    `2. Select a quick tag directly from the front menu.\n` +
-    `3. Or, **type any search word** (e.g. \`bhabhi\`) and send it to search the supported sites!\n` +
-    `4. Toggle the **Auto-Delete Timer** between Off, 15 Min, or 30 Min to automatically wipe media from the chat.\n` +
-    `5. At the bottom of the last post, use pagination controls to scroll pages.\n\n` +
-    `Use /start to open the main menu.`;
-  ctx.replyWithMarkdown(helpText, getMainMenu(ctx.chat.id)).catch(() => {});
+  ctx.replyWithMarkdown(HELP_TEXT, getMainMenu(ctx.chat.id)).catch(() => {});
 });
 
 bot.action('help', async (ctx) => {
   await ctx.answerCbQuery().catch(() => {});
-  const helpText = `📖 *Usage Instructions*:\n\n` +
-    `1. Click on any site button to open the page selector.\n` +
-    `2. Select a quick tag directly from the front menu.\n` +
-    `3. Or, **type any search word** (e.g. \`bhabhi\`) and send it to search the supported sites!\n` +
-    `4. Toggle the **Auto-Delete Timer** between Off, 15 Min, or 30 Min to automatically wipe media from the chat.\n` +
-    `5. At the bottom of the last post, use pagination controls to scroll pages.\n\n` +
-    `Use /start to open the main menu.`;
-  await ctx.editMessageText(helpText, {
+  await ctx.editMessageText(HELP_TEXT, {
     parse_mode: 'Markdown',
     ...getMainMenu(ctx.chat.id)
   }).catch(() => {});
@@ -404,16 +425,51 @@ async function handleScrapeAction(ctx, siteName, page, scrapeFn, tag = '', query
         `📥 *Direct Video URL* (tap to copy):\n` +
         `\`${post.videoUrl}\``;
 
+      let keyboard = null;
+      if (post.videoUrl) {
+        const shortId = getShortVideoId(post.videoUrl);
+        keyboard = Markup.inlineKeyboard([
+          [
+            Markup.button.url('🎥 Watch Direct Video', post.videoUrl),
+            Markup.button.callback('⬇️ Download to Telegram', `dl_${shortId}`)
+          ]
+        ]);
+      }
+
+      const replyOptions = {
+        caption,
+        parse_mode: 'Markdown',
+        ...(keyboard ? keyboard : {})
+      };
+
       try {
         let msg = null;
-        if (post.thumbnail) {
-          msg = await ctx.replyWithPhoto(post.thumbnail, { caption, parse_mode: 'Markdown' }).catch(() => {});
-        } else {
-          msg = await ctx.replyWithMarkdown(caption).catch(() => {});
+        // Try native video first, then fallback to photo, then to text
+        try {
+          if (post.videoUrl) {
+            msg = await ctx.replyWithVideo(post.videoUrl, replyOptions);
+          } else {
+            throw new Error("No video url");
+          }
+        } catch (videoErr) {
+          if (post.thumbnail) {
+            msg = await ctx.replyWithPhoto(post.thumbnail, replyOptions).catch(() => {});
+          } else {
+            if (keyboard) {
+              msg = await ctx.replyWithMarkdown(caption, keyboard).catch(() => {});
+            } else {
+              msg = await ctx.replyWithMarkdown(caption).catch(() => {});
+            }
+          }
         }
         if (msg) sentMessageIds.push(msg.message_id);
       } catch (err) {
-        const msg = await ctx.replyWithMarkdown(caption).catch(() => {});
+        let msg;
+        if (keyboard) {
+          msg = await ctx.replyWithMarkdown(caption, keyboard).catch(() => {});
+        } else {
+          msg = await ctx.replyWithMarkdown(caption).catch(() => {});
+        }
         if (msg) sentMessageIds.push(msg.message_id);
       }
     }
@@ -430,18 +486,30 @@ async function handleScrapeAction(ctx, siteName, page, scrapeFn, tag = '', query
       `\`${lastPost.videoUrl}\``;
 
     const siteKey = siteName.toLowerCase();
-    const paginationKeyboard = getPaginationKeyboard(siteKey, page, tag, queryId);
+    const paginationKeyboard = getPaginationKeyboard(siteKey, page, tag, queryId, lastPost.videoUrl);
 
     try {
       let msgLast = null;
-      if (lastPost.thumbnail) {
-        msgLast = await ctx.replyWithPhoto(lastPost.thumbnail, {
-          caption: lastCaption,
-          parse_mode: 'Markdown',
-          ...paginationKeyboard
-        }).catch(() => {});
-      } else {
-        msgLast = await ctx.replyWithMarkdown(lastCaption, paginationKeyboard).catch(() => {});
+      try {
+        if (lastPost.videoUrl) {
+          msgLast = await ctx.replyWithVideo(lastPost.videoUrl, {
+            caption: lastCaption,
+            parse_mode: 'Markdown',
+            ...paginationKeyboard
+          });
+        } else {
+          throw new Error("No video url");
+        }
+      } catch (videoErr) {
+        if (lastPost.thumbnail) {
+          msgLast = await ctx.replyWithPhoto(lastPost.thumbnail, {
+            caption: lastCaption,
+            parse_mode: 'Markdown',
+            ...paginationKeyboard
+          }).catch(() => {});
+        } else {
+          msgLast = await ctx.replyWithMarkdown(lastCaption, paginationKeyboard).catch(() => {});
+        }
       }
       if (msgLast) sentMessageIds.push(msgLast.message_id);
     } catch (err) {
@@ -480,7 +548,7 @@ async function handleScrapeAction(ctx, siteName, page, scrapeFn, tag = '', query
 }
 
 // Register generic page scraper action handler
-bot.action(/^scrape_(.+)_(.+)$/, async (ctx) => {
+bot.action(/^scrape_([a-z0-9_]+)_(\d+)$/, async (ctx) => {
   const siteKey = ctx.match[1];
   const page = parseInt(ctx.match[2], 10);
   
@@ -526,8 +594,10 @@ bot.action(/^scrape_(.+)_(.+)$/, async (ctx) => {
   }
 });
 
+const validSitesPattern = 'all|kamaclips|viralmms|desisexvdo|desibabe|desihub|desibf|desileak49|mastiraja|trending_all_in_one|popular_all_in_one';
+
 // Register generic tag search handler
-bot.action(/^search_(.+)_(.+)_(.+)$/, async (ctx) => {
+bot.action(new RegExp('^search_(' + validSitesPattern + ')_(.+)_(\\d+)$'), async (ctx) => {
   const siteKey = ctx.match[1];
   const tagKey = ctx.match[2];
   const page = parseInt(ctx.match[3], 10);
@@ -565,7 +635,7 @@ bot.action(/^search_(.+)_(.+)_(.+)$/, async (ctx) => {
 });
 
 // Register custom search callback query triggers
-bot.action(/^csearch_(.+)_(.+)_(.+)$/, async (ctx) => {
+bot.action(new RegExp('^csearch_(' + validSitesPattern + ')_(.+)_(\\d+)$'), async (ctx) => {
   const siteKey = ctx.match[1];
   const queryId = ctx.match[2];
   const page = parseInt(ctx.match[3], 10);
@@ -606,6 +676,45 @@ bot.action(/^csearch_(.+)_(.+)_(.+)$/, async (ctx) => {
   }
 });
 
+bot.action(/^dl_(v\d+)$/, async (ctx) => {
+  const shortId = ctx.match[1];
+  const videoUrl = videoDownloadUrls.get(shortId);
+
+  if (!videoUrl) {
+    return ctx.answerCbQuery('Download link expired. Please search again.').catch(() => {});
+  }
+
+  await ctx.answerCbQuery('Downloading video to Telegram... This may take a minute.').catch(() => {});
+
+  const statusMsg = await ctx.replyWithMarkdown('⏳ _Downloading video..._').catch(() => {});
+
+  try {
+    const response = await axios({
+      method: 'GET',
+      url: videoUrl,
+      responseType: 'stream',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      }
+    });
+
+    await ctx.replyWithVideo({ source: response.data }, {
+      caption: '✅ *Video Downloaded Successfully*',
+      parse_mode: 'Markdown'
+    });
+
+    if (statusMsg) {
+      await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+    }
+  } catch (error) {
+    console.error('Error downloading video:', error);
+    if (statusMsg) {
+      await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+    }
+    await ctx.replyWithMarkdown('❌ Failed to download the video. The file might be too large or the server is blocking requests.').catch(() => {});
+  }
+});
+
 bot.action('noop', (ctx) => ctx.answerCbQuery().catch(() => {}));
 
-export { bot, customQueries };
+export { bot, customQueries, getShortVideoId, videoDownloadUrls };

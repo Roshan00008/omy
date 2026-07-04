@@ -11,6 +11,19 @@ const HEADERS = {
 
 const cache = {};
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour cache duration
+const DEFAULT_TIMEOUT = 15000;
+
+async function axiosGetWithRetry(url, options = {}, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      return await axios.get(url, { ...options, timeout: options.timeout || DEFAULT_TIMEOUT });
+    } catch (err) {
+      if (i === retries) throw err;
+      const delay = Math.pow(2, i) * 1000;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
 
 function getCached(key) {
   const entry = cache[key];
@@ -44,11 +57,30 @@ function normalizeUrl(url, base) {
   return normalized;
 }
 
+// helper to extract video URL from specific iframe embeds
+function extractIframeVideoUrl(post$) {
+  const iframeSrc = post$('iframe[src*="player-x.php"]').attr('src');
+  if (iframeSrc) {
+    try {
+      const urlObj = new URL(iframeSrc);
+      const q = urlObj.searchParams.get('q');
+      if (q) {
+        const decoded = Buffer.from(q, 'base64').toString('utf8');
+        const match = decoded.match(/src=["'](https?:\/\/[^"']+)["']/);
+        if (match) return match[1];
+      }
+    } catch (e) {
+      // Ignore URL parsing errors
+    }
+  }
+  return null;
+}
+
 /**
  * Scrapes Kamaclips.com
  */
-async function scrapeKamaClips(page = 1, searchTerm = '') {
-  const cacheKey = `kamaclips_${page}_${searchTerm || 'default'}`;
+async function scrapeKamaClips(page = 1, searchTerm = '', limit = 10) {
+  const cacheKey = `kamaclips_${page}_${searchTerm || 'default'}_l${limit}`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
@@ -63,7 +95,7 @@ async function scrapeKamaClips(page = 1, searchTerm = '') {
   }
 
   try {
-    const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const res = await axiosGetWithRetry(url, { headers: HEADERS });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -89,27 +121,19 @@ async function scrapeKamaClips(page = 1, searchTerm = '') {
         urls.add(post.url);
         uniquePosts.push(post);
       }
-      if (uniquePosts.length >= 10) break;
+      if (uniquePosts.length >= limit) break;
     }
 
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
+          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = post$('meta[itemprop="contentURL"]').attr('content');
 
           if (!videoUrl) {
-            const iframeSrc = post$('iframe[src*="player-x.php"]').attr('src');
-            if (iframeSrc) {
-              const urlObj = new URL(iframeSrc);
-              const q = urlObj.searchParams.get('q');
-              if (q) {
-                const decoded = Buffer.from(q, 'base64').toString('utf8');
-                const match = decoded.match(/src=["'](https?:\/\/[^"']+)["']/);
-                if (match) videoUrl = match[1];
-              }
-            }
+            const iframeUrl = extractIframeVideoUrl(post$);
+            if (iframeUrl) videoUrl = iframeUrl;
           }
 
           if (!videoUrl) {
@@ -136,15 +160,15 @@ async function scrapeKamaClips(page = 1, searchTerm = '') {
 /**
  * Scrapes Viralmms.com
  */
-async function scrapeViralMms(page = 1) {
-  const cacheKey = `viralmms_${page}`;
+async function scrapeViralMms(page = 1, limit = 10) {
+  const cacheKey = `viralmms_${page}_l${limit}`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
   const baseUrl = 'https://viralmms.com';
   const url = page === 1 ? baseUrl : `${baseUrl}/page/${page}`;
   try {
-    const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const res = await axiosGetWithRetry(url, { headers: HEADERS });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -192,13 +216,13 @@ async function scrapeViralMms(page = 1) {
           urls.add(p.url);
           uniquePosts.push(p);
         }
-        if (uniquePosts.length >= 10) break;
+        if (uniquePosts.length >= limit) break;
       }
 
       const resolved = await Promise.all(
         uniquePosts.map(async (post) => {
           try {
-            const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
+            const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
             const post$ = cheerio.load(postRes.data);
             let videoUrl = null;
             let thumbnail = null;
@@ -235,7 +259,7 @@ async function scrapeViralMms(page = 1) {
       return validPosts;
     }
 
-    const limitedPosts = posts.slice(0, 10);
+    const limitedPosts = posts.slice(0, limit);
     setCached(cacheKey, limitedPosts);
     return limitedPosts;
   } catch (err) {
@@ -247,8 +271,8 @@ async function scrapeViralMms(page = 1) {
 /**
  * Scrapes Desisexvdo.com
  */
-async function scrapeDesiSexVdo(page = 1, searchTerm = '') {
-  const cacheKey = `desisexvdo_${page}_${searchTerm || 'default'}`;
+async function scrapeDesiSexVdo(page = 1, searchTerm = '', limit = 10) {
+  const cacheKey = `desisexvdo_${page}_${searchTerm || 'default'}_l${limit}`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
@@ -263,7 +287,7 @@ async function scrapeDesiSexVdo(page = 1, searchTerm = '') {
   }
 
   try {
-    const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const res = await axiosGetWithRetry(url, { headers: HEADERS });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -289,13 +313,13 @@ async function scrapeDesiSexVdo(page = 1, searchTerm = '') {
         urls.add(post.url);
         uniquePosts.push(post);
       }
-      if (uniquePosts.length >= 10) break;
+      if (uniquePosts.length >= limit) break;
     }
 
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
+          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = null;
           let thumbnail = null;
@@ -341,17 +365,16 @@ async function scrapeDesiSexVdo(page = 1, searchTerm = '') {
 }
 
 /**
- * Scrapes Desibabe.tv
+ * Generic scraper function for Desi sites with similar structures (e.g. DesiBabe, DesiHub)
  */
-async function scrapeDesiBabe(page = 1) {
-  const cacheKey = `desibabe_${page}`;
+async function scrapeGenericDesiSite(siteName, baseUrl, cacheKeyPrefix, page = 1, limit = 10) {
+  const cacheKey = `${cacheKeyPrefix}_${page}_l${limit}`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
-  const baseUrl = 'https://desibabe.tv';
   const url = page === 1 ? baseUrl : `${baseUrl}/page/${page}`;
   try {
-    const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const res = await axiosGetWithRetry(url, { headers: HEADERS });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -366,7 +389,7 @@ async function scrapeDesiBabe(page = 1) {
                 posts.push({
                   title: item.name,
                   url: normalizeUrl(item.url, baseUrl),
-                  siteName: 'DesiBabe'
+                  siteName: siteName
                 });
               }
             }
@@ -383,7 +406,7 @@ async function scrapeDesiBabe(page = 1) {
           posts.push({
             title,
             url: normalizeUrl(href, baseUrl),
-            siteName: 'DesiBabe'
+            siteName: siteName
           });
         }
       });
@@ -396,13 +419,13 @@ async function scrapeDesiBabe(page = 1) {
         urls.add(post.url);
         uniquePosts.push(post);
       }
-      if (uniquePosts.length >= 10) break;
+      if (uniquePosts.length >= limit) break;
     }
 
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
+          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = null;
           let thumbnail = null;
@@ -438,119 +461,30 @@ async function scrapeDesiBabe(page = 1) {
     setCached(cacheKey, validPosts);
     return validPosts;
   } catch (err) {
-    console.error(`Error scraping DesiBabe (Page ${page}):`, err.message);
+    console.error(`Error scraping ${siteName} (Page ${page}):`, err.message);
     return [];
   }
+}
+
+/**
+ * Scrapes Desibabe.tv
+ */
+async function scrapeDesiBabe(page = 1, limit = 10) {
+  return scrapeGenericDesiSite('DesiBabe', 'https://desibabe.tv', 'desibabe', page, limit);
 }
 
 /**
  * Scrapes Desihub.to
  */
-async function scrapeDesiHub(page = 1) {
-  const cacheKey = `desihub_${page}`;
-  const cached = getCached(cacheKey);
-  if (cached) return cached;
-
-  const baseUrl = 'https://desihub.to';
-  const url = page === 1 ? baseUrl : `${baseUrl}/page/${page}`;
-  try {
-    const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
-    const $ = cheerio.load(res.data);
-    const posts = [];
-
-    $('script[type="application/ld+json"]').each((_, el) => {
-      try {
-        const data = JSON.parse($(el).text());
-        const graph = data['@graph'] || (Array.isArray(data) ? data : [data]);
-        for (const node of graph) {
-          if ((node['@type'] === 'CollectionPage' || node['@type'] === 'WebPage') && node.mainEntity && node.mainEntity.itemListElement) {
-            for (const item of node.mainEntity.itemListElement) {
-              if (item.url && item.name) {
-                posts.push({
-                  title: item.name,
-                  url: normalizeUrl(item.url, baseUrl),
-                  siteName: 'DesiHub'
-                });
-              }
-            }
-          }
-        }
-      } catch (e) {}
-    });
-
-    if (posts.length === 0) {
-      $('a[href^="/post/"]').each((_, el) => {
-        const title = $(el).find('h3').text().trim() || $(el).attr('title') || $(el).text().trim();
-        const href = $(el).attr('href');
-        if (title && href) {
-          posts.push({
-            title,
-            url: normalizeUrl(href, baseUrl),
-            siteName: 'DesiHub'
-          });
-        }
-      });
-    }
-
-    const uniquePosts = [];
-    const urls = new Set();
-    for (const post of posts) {
-      if (!urls.has(post.url)) {
-        urls.add(post.url);
-        uniquePosts.push(post);
-      }
-      if (uniquePosts.length >= 10) break;
-    }
-
-    const resolvedPosts = await Promise.all(
-      uniquePosts.map(async (post) => {
-        try {
-          const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
-          const post$ = cheerio.load(postRes.data);
-          let videoUrl = null;
-          let thumbnail = null;
-
-          post$('script[type="application/ld+json"]').each((_, el) => {
-            try {
-              const data = JSON.parse(post$(el).text());
-              const graph = data['@graph'] || (Array.isArray(data) ? data : [data]);
-              for (const node of graph) {
-                if (node['@type'] === 'VideoObject') {
-                  videoUrl = node.contentUrl;
-                  thumbnail = node.thumbnailUrl;
-                }
-              }
-            } catch (e) {}
-          });
-
-          if (!videoUrl) {
-            const embedIframe = post$('iframe[src*="downloaddirect.xyz/embed"]').attr('src');
-            if (embedIframe) videoUrl = embedIframe;
-          }
-
-          post.videoUrl = normalizeUrl(videoUrl, baseUrl);
-          post.thumbnail = normalizeUrl(thumbnail || post$('meta[property="og:image"]').attr('content'), baseUrl);
-          return post;
-        } catch (err) {
-          return post;
-        }
-      })
-    );
-
-    const validPosts = resolvedPosts.filter(p => p.videoUrl);
-    setCached(cacheKey, validPosts);
-    return validPosts;
-  } catch (err) {
-    console.error(`Error scraping DesiHub (Page ${page}):`, err.message);
-    return [];
-  }
+async function scrapeDesiHub(page = 1, limit = 10) {
+  return scrapeGenericDesiSite('DesiHub', 'https://desihub.to', 'desihub', page, limit);
 }
 
 /**
  * Scrapes Desibf.com
  */
-async function scrapeDesiBF(page = 1, searchTerm = '') {
-  const cacheKey = `desibf_${page}_${searchTerm || 'default'}`;
+async function scrapeDesiBF(page = 1, searchTerm = '', limit = 10) {
+  const cacheKey = `desibf_${page}_${searchTerm || 'default'}_l${limit}`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
@@ -565,7 +499,7 @@ async function scrapeDesiBF(page = 1, searchTerm = '') {
   }
 
   try {
-    const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const res = await axiosGetWithRetry(url, { headers: HEADERS });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -591,27 +525,19 @@ async function scrapeDesiBF(page = 1, searchTerm = '') {
         urls.add(post.url);
         uniquePosts.push(post);
       }
-      if (uniquePosts.length >= 10) break;
+      if (uniquePosts.length >= limit) break;
     }
 
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
+          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = post$('meta[itemprop="contentURL"]').attr('content');
 
           if (!videoUrl) {
-            const iframeSrc = post$('iframe[src*="player-x.php"]').attr('src');
-            if (iframeSrc) {
-              const urlObj = new URL(iframeSrc);
-              const q = urlObj.searchParams.get('q');
-              if (q) {
-                const decoded = Buffer.from(q, 'base64').toString('utf8');
-                const match = decoded.match(/src=["'](https?:\/\/[^"']+)["']/);
-                if (match) videoUrl = match[1];
-              }
-            }
+            const iframeUrl = extractIframeVideoUrl(post$);
+            if (iframeUrl) videoUrl = iframeUrl;
           }
 
           if (!videoUrl) {
@@ -638,8 +564,8 @@ async function scrapeDesiBF(page = 1, searchTerm = '') {
 /**
  * Scrapes Desileak49.com
  */
-async function scrapeDesiLeak49(page = 1, searchTerm = '') {
-  const cacheKey = `desileak49_${page}_${searchTerm || 'default'}`;
+async function scrapeDesiLeak49(page = 1, searchTerm = '', limit = 10) {
+  const cacheKey = `desileak49_${page}_${searchTerm || 'default'}_l${limit}`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
@@ -654,7 +580,7 @@ async function scrapeDesiLeak49(page = 1, searchTerm = '') {
   }
 
   try {
-    const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const res = await axiosGetWithRetry(url, { headers: HEADERS });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -699,13 +625,13 @@ async function scrapeDesiLeak49(page = 1, searchTerm = '') {
         urls.add(post.url);
         uniquePosts.push(post);
       }
-      if (uniquePosts.length >= 10) break;
+      if (uniquePosts.length >= limit) break;
     }
 
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
+          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = post$('meta[property="og:video"]').attr('content');
           let thumbnail = post$('meta[property="og:image"]').attr('content');
@@ -735,8 +661,8 @@ async function scrapeDesiLeak49(page = 1, searchTerm = '') {
 /**
  * Scrapes Mastiraja.com
  */
-async function scrapeMastiRaja(page = 1, searchTerm = '') {
-  const cacheKey = `mastiraja_${page}_${searchTerm || 'default'}`;
+async function scrapeMastiRaja(page = 1, searchTerm = '', limit = 10) {
+  const cacheKey = `mastiraja_${page}_${searchTerm || 'default'}_l${limit}`;
   const cached = getCached(cacheKey);
   if (cached) return cached;
 
@@ -751,7 +677,7 @@ async function scrapeMastiRaja(page = 1, searchTerm = '') {
   }
 
   try {
-    const res = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    const res = await axiosGetWithRetry(url, { headers: HEADERS });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -777,27 +703,19 @@ async function scrapeMastiRaja(page = 1, searchTerm = '') {
         urls.add(post.url);
         uniquePosts.push(post);
       }
-      if (uniquePosts.length >= 10) break;
+      if (uniquePosts.length >= limit) break;
     }
 
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axios.get(post.url, { headers: HEADERS, timeout: 10000 });
+          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = post$('meta[itemprop="contentURL"]').attr('content');
 
           if (!videoUrl) {
-            const iframeSrc = post$('iframe[src*="player-x.php"]').attr('src');
-            if (iframeSrc) {
-              const urlObj = new URL(iframeSrc);
-              const q = urlObj.searchParams.get('q');
-              if (q) {
-                const decoded = Buffer.from(q, 'base64').toString('utf8');
-                const match = decoded.match(/src=["'](https?:\/\/[^"']+)["']/);
-                if (match) videoUrl = match[1];
-              }
-            }
+            const iframeUrl = extractIframeVideoUrl(post$);
+            if (iframeUrl) videoUrl = iframeUrl;
           }
 
           if (!videoUrl) {
@@ -829,5 +747,9 @@ export {
   scrapeDesiHub,
   scrapeDesiBF,
   scrapeDesiLeak49,
-  scrapeMastiRaja
+  scrapeMastiRaja,
+  getCached,
+  setCached,
+  cache,
+  CACHE_TTL
 };
