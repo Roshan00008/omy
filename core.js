@@ -138,6 +138,11 @@ function scheduleDeletion(ctx, messageIds, minutes) {
   }, minutes * 60 * 1000);
 }
 
+// Helper to merge and shuffle results from multiple scrapers
+function mergeResults(resultsArray) {
+  return [].concat(...resultsArray).filter(Boolean).sort(() => Math.random() - 0.5);
+}
+
 // Consolidated AIO Scraper (shuffles/combines posts from all 8 sites)
 async function scrapeAIO(page = 1, filterType = 'latest') {
   const limitPerSite = 3;
@@ -728,7 +733,6 @@ bot.action(/^dl_(v\d+)$/, async (ctx) => {
 
   let tmpPath = null;
   try {
-    // Determine the site base URL from the video URL for header matching
     let siteBaseUrl;
     try { siteBaseUrl = new URL(videoUrl).origin; } catch (_) { siteBaseUrl = ''; }
 
@@ -744,12 +748,10 @@ bot.action(/^dl_(v\d+)$/, async (ctx) => {
     console.error('Error downloading video:', error.message);
     if (statusMsg) await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
 
-    // Graceful fallback – send the raw URL so the user can still access it
     await ctx.replyWithMarkdown(
       `❌ *Could not download the video.*\n_Reason: ${error.message}_\n\n📥 Direct link:\n\`${videoUrl}\``
     ).catch(() => {});
   } finally {
-    // Always clean up the temp file
     if (tmpPath) {
       try { fs.unlinkSync(tmpPath); } catch (_) {}
     }
