@@ -1,6 +1,9 @@
 import { Telegraf, Markup } from 'telegraf';
 import dotenv from 'dotenv';
 import axios from 'axios';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import {
   scrapeKamaClips,
   scrapeViralMms,
@@ -9,8 +12,61 @@ import {
   scrapeDesiHub,
   scrapeDesiBF,
   scrapeDesiLeak49,
-  scrapeMastiRaja
+  scrapeMastiRaja,
+  getRequestHeaders,
+  ensureClearance
 } from './scraper.js';
+
+// ---------------------------------------------------------------------------
+// downloadVideo – streams a remote video to a temp file using the same
+// rotating-UA + Referer + Cloudflare-clearance headers as the scrapers.
+// Throws if the file is > 45 MB or the server returns a non-200 status.
+// ---------------------------------------------------------------------------
+async function downloadVideo(videoUrl, siteBaseUrl) {
+  const baseUrl = siteBaseUrl || new URL(videoUrl).origin;
+  await ensureClearance(baseUrl);
+  const headers = getRequestHeaders(baseUrl);
+
+  const response = await axios({
+    method: 'get',
+    url: videoUrl,
+    responseType: 'stream',
+    headers,
+    timeout: 60000,  // 60 s for large files
+    maxRedirects: 5,
+    validateStatus: null
+  });
+
+  if (response.status !== 200) {
+    throw new Error(`Download failed – HTTP ${response.status}`);
+  }
+
+  // Respect Content-Length if present
+  const contentLength = Number(response.headers['content-length'] || 0);
+  const maxBytes = 45 * 1024 * 1024; // 45 MB safety margin
+  if (contentLength && contentLength > maxBytes) {
+    throw new Error(`Video too large (${(contentLength / (1024 * 1024)).toFixed(1)} MB > 45 MB limit)`);
+  }
+
+  const tmpPath = path.join(os.tmpdir(), `tgvid_${Date.now()}.mp4`);
+  const writer = fs.createWriteStream(tmpPath);
+  let downloaded = 0;
+
+  await new Promise((resolve, reject) => {
+    response.data.on('data', chunk => {
+      downloaded += chunk.length;
+      if (downloaded > maxBytes) {
+        writer.destroy();
+        reject(new Error('Video exceeded 45 MB size limit during streaming'));
+      }
+    });
+    response.data.pipe(writer);
+    writer.on('finish', resolve);
+    writer.on('error', reject);
+  });
+
+  return tmpPath; // caller must delete after use
+}
 
 dotenv.config();
 
@@ -676,34 +732,36 @@ bot.action(/^dl_(v\d+)$/, async (ctx) => {
     return ctx.answerCbQuery('Download link expired. Please search again.').catch(() => {});
   }
 
-  await ctx.answerCbQuery('Downloading video to Telegram... This may take a minute.').catch(() => {});
+  await ctx.answerCbQuery('⬇️ Downloading... this may take a minute.').catch(() => {});
+  const statusMsg = await ctx.replyWithMarkdown('⏳ _Downloading video to Telegram..._').catch(() => {});
 
-  const statusMsg = await ctx.replyWithMarkdown('⏳ _Downloading video..._').catch(() => {});
-
+  let tmpPath = null;
   try {
-    const response = await axios({
-      method: 'GET',
-      url: videoUrl,
-      responseType: 'stream',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-      }
-    });
+    // Determine the site base URL from the video URL for header matching
+    let siteBaseUrl;
+    try { siteBaseUrl = new URL(videoUrl).origin; } catch (_) { siteBaseUrl = ''; }
 
-    await ctx.replyWithVideo({ source: response.data }, {
-      caption: '✅ *Video Downloaded Successfully*',
-      parse_mode: 'Markdown'
-    });
+    tmpPath = await downloadVideo(videoUrl, siteBaseUrl);
 
-    if (statusMsg) {
-      await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
-    }
+    await ctx.replyWithVideo(
+      { source: fs.createReadStream(tmpPath) },
+      { caption: '✅ *Video Downloaded Successfully*', parse_mode: 'Markdown' }
+    );
+
+    if (statusMsg) await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
   } catch (error) {
-    console.error('Error downloading video:', error);
-    if (statusMsg) {
-      await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+    console.error('Error downloading video:', error.message);
+    if (statusMsg) await ctx.telegram.deleteMessage(ctx.chat.id, statusMsg.message_id).catch(() => {});
+
+    // Graceful fallback – send the raw URL so the user can still access it
+    await ctx.replyWithMarkdown(
+      `❌ *Could not download the video.*\n_Reason: ${error.message}_\n\n📥 Direct link:\n\`${videoUrl}\``
+    ).catch(() => {});
+  } finally {
+    // Always clean up the temp file
+    if (tmpPath) {
+      try { fs.unlinkSync(tmpPath); } catch (_) {}
     }
-    await ctx.replyWithMarkdown('❌ Failed to download the video. The file might be too large or the server is blocking requests.').catch(() => {});
   }
 });
 

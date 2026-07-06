@@ -1,5 +1,19 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import puppeteer from 'puppeteer-core';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+
+// Path to Chrome or Edge on this machine (used for Cloudflare bypass)
+const CHROME_PATH = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const EDGE_PATH = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
+const BROWSER_PATH = (() => {
+  const fsSync = require('fs');
+  try { fsSync.accessSync(CHROME_PATH); return CHROME_PATH; } catch (_) {}
+  try { fsSync.accessSync(EDGE_PATH); return EDGE_PATH; } catch (_) {}
+  return null;
+})();
+
 
 const HEADERS = {
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -8,26 +22,83 @@ const HEADERS = {
   'Pragma': 'no-cache'
 };
 
-// A pool of common desktop User‑Agent strings to rotate on each request – helps avoid 403 blocks.
+// A pool of common desktop User-Agent strings to rotate on each request – helps avoid 403 blocks.
 const USER_AGENTS = [
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15',
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1',
-  'Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0',
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1',
+  'Mozilla/5.0 (iPad; CPU OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1'
 ];
 
 function getRandomUserAgent() {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
 
+// -------------------------------------------------------------------
+// Cloudflare clearance cookie cache (per base URL, 5 min TTL)
+// -------------------------------------------------------------------
+const cloudflareCache = {};
+
+/**
+ * Attempt to get / refresh a Cloudflare clearance cookie for a site.
+ * We do a lightweight GET to the home page and capture any set-cookie header.
+ * This works for sites that issue the clearance immediately (no JS challenge).
+ */
+async function ensureClearance(baseUrl) {
+  const cached = cloudflareCache[baseUrl];
+  if (cached && Date.now() - cached.ts < 5 * 60 * 1000) return; // still fresh
+
+  try {
+    const res = await axios.get(baseUrl, {
+      headers: { ...HEADERS, 'User-Agent': getRandomUserAgent() },
+      timeout: DEFAULT_TIMEOUT,
+      maxRedirects: 5,
+      validateStatus: null
+    });
+    const setCookie = res.headers['set-cookie'];
+    if (setCookie) {
+      const cf = setCookie.find(c => c.startsWith('cf_clearance='));
+      if (cf) {
+        cloudflareCache[baseUrl] = { cookie: cf.split(';')[0], ts: Date.now() };
+      }
+    }
+  } catch (_) {
+    // clearance attempt failed – continue without cookie
+  }
+}
+
+/**
+ * Build full request headers for a site.
+ * Mixes rotating UA + Referer + Accept-Encoding + any stored clearance cookie.
+ */
+function getRequestHeaders(baseUrl) {
+  const base = {
+    ...HEADERS,
+    'User-Agent': getRandomUserAgent(),
+    Referer: baseUrl,
+    'Accept-Encoding': 'gzip, deflate, br'
+  };
+  if (cloudflareCache[baseUrl]) {
+    base.Cookie = cloudflareCache[baseUrl].cookie;
+  }
+  return base;
+}
+
 const cache = {};
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour cache duration
 const DEFAULT_TIMEOUT = 15000;
 
+/** 300 ms throttle before every outbound request to stay under CDN rate limits. */
+async function throttledDelay() {
+  await new Promise(r => setTimeout(r, 300));
+}
+
 async function axiosGetWithRetry(url, options = {}, retries = 2) {
   for (let i = 0; i <= retries; i++) {
     try {
+      await throttledDelay();
       return await axios.get(url, { ...options, timeout: options.timeout || DEFAULT_TIMEOUT });
     } catch (err) {
       if (i === retries) throw err;
@@ -78,7 +149,7 @@ function extractIframeVideoUrl(post$) {
       const q = urlObj.searchParams.get('q');
       if (q) {
         const decoded = Buffer.from(q, 'base64').toString('utf8');
-        const match = decoded.match(/src=["'](https?:\/\/[^"']+)["']/);
+        const match = decoded.match(/src=["'](https?:\/\/[^"']+)['"]/);
         if (match) return match[1];
       }
     } catch (e) {
@@ -86,6 +157,46 @@ function extractIframeVideoUrl(post$) {
     }
   }
   return null;
+}
+
+/**
+ * Fetch a Cloudflare-protected page using headless Chrome/Edge.
+ * Returns the page HTML as a string, or null on failure.
+ * @param {string} url - Full URL to fetch
+ */
+async function cfScrapeHtml(url) {
+  if (!BROWSER_PATH) {
+    console.warn('cfScrapeHtml: no browser found, skipping headless fetch');
+    return null;
+  }
+  let browser;
+  try {
+    browser = await puppeteer.launch({
+      executablePath: BROWSER_PATH,
+      headless: 'new',
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled'
+      ]
+    });
+    const page = await browser.newPage();
+    await page.setUserAgent(getRandomUserAgent());
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Referer': new URL(url).origin
+    });
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    // Wait a moment for CF challenge to resolve
+    await page.waitForTimeout(3000);
+    const html = await page.content();
+    return html;
+  } catch (err) {
+    console.error('cfScrapeHtml error:', err.message);
+    return null;
+  } finally {
+    if (browser) await browser.close().catch(() => {});
+  }
 }
 
 /**
@@ -107,8 +218,26 @@ async function scrapeKamaClips(page = 1, searchTerm = '', limit = 10) {
   }
 
   try {
-    const res = await axiosGetWithRetry(url, { headers: { ...HEADERS, 'User-Agent': getRandomUserAgent() } });
-    const $ = cheerio.load(res.data);
+    // Try plain axios first (fast path)
+    let html = null;
+    try {
+      await ensureClearance(baseUrl);
+      const res = await axiosGetWithRetry(url, { headers: getRequestHeaders(baseUrl) });
+      if (res.status === 403 || res.status === 503) {
+        throw new Error(`CF blocked: ${res.status}`);
+      }
+      html = res.data;
+    } catch (axiosErr) {
+      console.warn(`KamaClips axios blocked (${axiosErr.message}), falling back to headless browser...`);
+      html = await cfScrapeHtml(url);
+    }
+
+    if (!html) {
+      console.error('KamaClips: both axios and headless browser failed.');
+      return [];
+    }
+
+    const $ = cheerio.load(html);
     const posts = [];
 
     $('.video-loop .video-block').each((_, el) => {
@@ -121,7 +250,8 @@ async function scrapeKamaClips(page = 1, searchTerm = '', limit = 10) {
           title,
           url: normalizeUrl(href, baseUrl),
           thumbnail: normalizeUrl(imgSrc, baseUrl),
-          siteName: 'KamaClips'
+          siteName: 'KamaClips',
+          siteBaseUrl: baseUrl
         });
       }
     });
@@ -139,7 +269,7 @@ async function scrapeKamaClips(page = 1, searchTerm = '', limit = 10) {
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
+          const postRes = await axiosGetWithRetry(post.url, { headers: getRequestHeaders(baseUrl) });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = post$('meta[itemprop="contentURL"]').attr('content');
 
@@ -180,7 +310,8 @@ async function scrapeViralMms(page = 1, limit = 10) {
   const baseUrl = 'https://viralmms.com';
   const url = page === 1 ? baseUrl : `${baseUrl}/page/${page}`;
   try {
-    const res = await axiosGetWithRetry(url, { headers: HEADERS });
+    await ensureClearance(baseUrl);
+    const res = await axiosGetWithRetry(url, { headers: getRequestHeaders(baseUrl) });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -198,7 +329,8 @@ async function scrapeViralMms(page = 1, limit = 10) {
                   url: normalizeUrl(item.url, baseUrl),
                   videoUrl: normalizeUrl(item.contentUrl, baseUrl),
                   thumbnail: normalizeUrl(item.thumbnailUrl, baseUrl),
-                  siteName: 'ViralMMS'
+                  siteName: 'ViralMMS',
+                  siteBaseUrl: baseUrl
                 });
               }
             }
@@ -216,7 +348,8 @@ async function scrapeViralMms(page = 1, limit = 10) {
           pagePosts.push({
             title,
             url: normalizeUrl(href, baseUrl),
-            siteName: 'ViralMMS'
+            siteName: 'ViralMMS',
+            siteBaseUrl: baseUrl
           });
         }
       });
@@ -234,7 +367,7 @@ async function scrapeViralMms(page = 1, limit = 10) {
       const resolved = await Promise.all(
         uniquePosts.map(async (post) => {
           try {
-            const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
+            const postRes = await axiosGetWithRetry(post.url, { headers: getRequestHeaders(baseUrl) });
             const post$ = cheerio.load(postRes.data);
             let videoUrl = null;
             let thumbnail = null;
@@ -300,7 +433,8 @@ async function scrapeDesiSexVdo(page = 1, searchTerm = '', limit = 10) {
   }
 
   try {
-    const res = await axiosGetWithRetry(url, { headers: HEADERS });
+    await ensureClearance(baseUrl);
+    const res = await axiosGetWithRetry(url, { headers: getRequestHeaders(baseUrl) });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -314,7 +448,8 @@ async function scrapeDesiSexVdo(page = 1, searchTerm = '', limit = 10) {
           title,
           url: normalizeUrl(href, baseUrl),
           thumbnail: normalizeUrl(imgSrc, baseUrl),
-          siteName: 'DesiSexVdo'
+          siteName: 'DesiSexVdo',
+          siteBaseUrl: baseUrl
         });
       }
     });
@@ -332,7 +467,7 @@ async function scrapeDesiSexVdo(page = 1, searchTerm = '', limit = 10) {
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
+          const postRes = await axiosGetWithRetry(post.url, { headers: getRequestHeaders(baseUrl) });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = null;
           let thumbnail = null;
@@ -388,7 +523,8 @@ async function scrapeGenericDesiSite(siteName, baseUrl, cacheKeyPrefix, page = 1
 
   const url = page === 1 ? baseUrl : `${baseUrl}/page/${page}`;
   try {
-    const res = await axiosGetWithRetry(url, { headers: HEADERS });
+    await ensureClearance(baseUrl);
+    const res = await axiosGetWithRetry(url, { headers: getRequestHeaders(baseUrl) });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -403,7 +539,8 @@ async function scrapeGenericDesiSite(siteName, baseUrl, cacheKeyPrefix, page = 1
                 posts.push({
                   title: item.name,
                   url: normalizeUrl(item.url, baseUrl),
-                  siteName: siteName
+                  siteName: siteName,
+                  siteBaseUrl: baseUrl
                 });
               }
             }
@@ -420,7 +557,8 @@ async function scrapeGenericDesiSite(siteName, baseUrl, cacheKeyPrefix, page = 1
           posts.push({
             title,
             url: normalizeUrl(href, baseUrl),
-            siteName: siteName
+            siteName: siteName,
+            siteBaseUrl: baseUrl
           });
         }
       });
@@ -439,7 +577,7 @@ async function scrapeGenericDesiSite(siteName, baseUrl, cacheKeyPrefix, page = 1
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
+          const postRes = await axiosGetWithRetry(post.url, { headers: getRequestHeaders(baseUrl) });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = null;
           let thumbnail = null;
@@ -499,7 +637,8 @@ async function scrapeDesiHub(page = 1, limit = 10) {
   const baseUrl = 'https://desihub.to';
   const url = page === 1 ? baseUrl : `${baseUrl}/page/${page}`;
   try {
-    const res = await axiosGetWithRetry(url, { headers: HEADERS });
+    await ensureClearance(baseUrl);
+    const res = await axiosGetWithRetry(url, { headers: getRequestHeaders(baseUrl) });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -514,7 +653,8 @@ async function scrapeDesiHub(page = 1, limit = 10) {
                 posts.push({
                   title: item.name,
                   url: normalizeUrl(item.url, baseUrl),
-                  siteName: 'DesiHub'
+                  siteName: 'DesiHub',
+                  siteBaseUrl: baseUrl
                 });
               }
             }
@@ -531,7 +671,8 @@ async function scrapeDesiHub(page = 1, limit = 10) {
           posts.push({
             title,
             url: normalizeUrl(href, baseUrl),
-            siteName: 'DesiHub'
+            siteName: 'DesiHub',
+            siteBaseUrl: baseUrl
           });
         }
       });
@@ -550,7 +691,7 @@ async function scrapeDesiHub(page = 1, limit = 10) {
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
+          const postRes = await axiosGetWithRetry(post.url, { headers: getRequestHeaders(baseUrl) });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = null;
           let thumbnail = null;
@@ -611,7 +752,8 @@ async function scrapeDesiBF(page = 1, searchTerm = '', limit = 10) {
   }
 
   try {
-    const res = await axiosGetWithRetry(url, { headers: HEADERS });
+    await ensureClearance(baseUrl);
+    const res = await axiosGetWithRetry(url, { headers: getRequestHeaders(baseUrl) });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -625,7 +767,8 @@ async function scrapeDesiBF(page = 1, searchTerm = '', limit = 10) {
           title,
           url: normalizeUrl(href, baseUrl),
           thumbnail: normalizeUrl(imgSrc, baseUrl),
-          siteName: 'DesiBF'
+          siteName: 'DesiBF',
+          siteBaseUrl: baseUrl
         });
       }
     });
@@ -643,7 +786,7 @@ async function scrapeDesiBF(page = 1, searchTerm = '', limit = 10) {
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
+          const postRes = await axiosGetWithRetry(post.url, { headers: getRequestHeaders(baseUrl) });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = post$('meta[itemprop="contentURL"]').attr('content');
 
@@ -692,7 +835,8 @@ async function scrapeDesiLeak49(page = 1, searchTerm = '', limit = 10) {
   }
 
   try {
-    const res = await axiosGetWithRetry(url, { headers: HEADERS });
+    await ensureClearance(baseUrl);
+    const res = await axiosGetWithRetry(url, { headers: getRequestHeaders(baseUrl) });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -707,7 +851,8 @@ async function scrapeDesiLeak49(page = 1, searchTerm = '', limit = 10) {
                 posts.push({
                   title: item.name,
                   url: normalizeUrl(item.url, baseUrl),
-                  siteName: 'DesiLeak49'
+                  siteName: 'DesiLeak49',
+                  siteBaseUrl: baseUrl
                 });
               }
             }
@@ -724,7 +869,8 @@ async function scrapeDesiLeak49(page = 1, searchTerm = '', limit = 10) {
           posts.push({
             title,
             url: normalizeUrl(href, baseUrl),
-            siteName: 'DesiLeak49'
+            siteName: 'DesiLeak49',
+            siteBaseUrl: baseUrl
           });
         }
       });
@@ -743,7 +889,7 @@ async function scrapeDesiLeak49(page = 1, searchTerm = '', limit = 10) {
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
+          const postRes = await axiosGetWithRetry(post.url, { headers: getRequestHeaders(baseUrl) });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = post$('meta[property="og:video"]').attr('content');
           let thumbnail = post$('meta[property="og:image"]').attr('content');
@@ -789,7 +935,8 @@ async function scrapeMastiRaja(page = 1, searchTerm = '', limit = 10) {
   }
 
   try {
-    const res = await axiosGetWithRetry(url, { headers: HEADERS });
+    await ensureClearance(baseUrl);
+    const res = await axiosGetWithRetry(url, { headers: getRequestHeaders(baseUrl) });
     const $ = cheerio.load(res.data);
     const posts = [];
 
@@ -803,7 +950,8 @@ async function scrapeMastiRaja(page = 1, searchTerm = '', limit = 10) {
           title,
           url: normalizeUrl(href, baseUrl),
           thumbnail: normalizeUrl(imgSrc, baseUrl),
-          siteName: 'MastiRaja'
+          siteName: 'MastiRaja',
+          siteBaseUrl: baseUrl
         });
       }
     });
@@ -821,7 +969,7 @@ async function scrapeMastiRaja(page = 1, searchTerm = '', limit = 10) {
     const resolvedPosts = await Promise.all(
       uniquePosts.map(async (post) => {
         try {
-          const postRes = await axiosGetWithRetry(post.url, { headers: HEADERS });
+          const postRes = await axiosGetWithRetry(post.url, { headers: getRequestHeaders(baseUrl) });
           const post$ = cheerio.load(postRes.data);
           let videoUrl = post$('meta[itemprop="contentURL"]').attr('content');
 
@@ -853,6 +1001,8 @@ async function scrapeMastiRaja(page = 1, searchTerm = '', limit = 10) {
 
 export {
   normalizeUrl,
+  getRequestHeaders,
+  ensureClearance,
   scrapeKamaClips,
   scrapeViralMms,
   scrapeDesiSexVdo,
