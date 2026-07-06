@@ -52,24 +52,21 @@ let customQueriesSize = 0;
 // Map to store video URLs for download to bypass 64-byte limit
 const videoDownloadUrls = new Map();
 let videoIdCounter = 0;
-let videoDownloadUrlsSize = 0;
 
 // Helper to store video URL and get short ID
 function getShortVideoId(url) {
   if (!url) return null;
   videoIdCounter++;
   const id = `v${videoIdCounter}`;
-  videoDownloadUrls[id] = url;
-  videoDownloadUrlsSize++;
+  videoDownloadUrls.set(id, url);
 
   // Prune map if too large
-  if (videoDownloadUrlsSize > 10000) {
-    const keys = Object.keys(videoDownloadUrls);
-    for (let i = 0; i < 2000; i++) {
-      if (keys[i] && videoDownloadUrls[keys[i]]) {
-        delete videoDownloadUrls[keys[i]];
-        videoDownloadUrlsSize--;
-      }
+  if (videoDownloadUrls.size > 10000) {
+    let count = 0;
+    for (const key of videoDownloadUrls.keys()) {
+      if (count >= 2000) break;
+      videoDownloadUrls.delete(key);
+      count++;
     }
   }
   return id;
