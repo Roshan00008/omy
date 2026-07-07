@@ -16,7 +16,7 @@ import {
   getRequestHeaders,
   ensureClearance
 } from './scraper.js';
-import { getFavorites, saveFavorite, removeFavorite, clearFavorites } from './favorites.js';
+import { getFavorites, saveFavorite, removeFavorite, clearFavorites, addScheduledUser, removeScheduledUser, toggleScheduledUser } from './kv-storage.js';
 
 // ---------------------------------------------------------------------------
 // downloadVideo – streams a remote video to a temp file using the same
@@ -922,6 +922,46 @@ bot.action(/^unsave_(\d+)_(\d+)$/, async (ctx) => {
 bot.command('clearfavorites', async (ctx) => {
   clearFavorites(ctx.from.id);
   await ctx.replyWithMarkdown('🗑️ *All favorites cleared.*', getMainMenu(ctx.chat.id)).catch(() => {});
+});
+
+// ─── /daily command — toggle personalized daily digest ──────────────────────────
+bot.command('daily', async (ctx) => {
+  const userId = ctx.from.id;
+  const chatId = ctx.chat.id;
+  
+  const enabled = await toggleScheduledUser(userId);
+  if (enabled === null) {
+    // First time - add them
+    const added = await addScheduledUser(userId, chatId);
+    if (added) {
+      await ctx.replyWithMarkdown(
+        `☀️ *Daily Digest Enabled!*\n\n` +
+        `You'll now receive a personalized Top 10 every day at **9:00 AM IST**.\n\n` +
+        `Use /daily again to disable.`,
+        getMainMenu(ctx.chat.id)
+      ).catch(() => {});
+    } else {
+      await ctx.replyWithMarkdown(
+        `ℹ️ *Already subscribed!*\n\n` +
+        `Use /daily to toggle on/off.`,
+        getMainMenu(ctx.chat.id)
+      ).catch(() => {});
+    }
+  } else if (enabled) {
+    await ctx.replyWithMarkdown(
+      `☀️ *Daily Digest Enabled!*\n\n` +
+      `You'll receive your Top 10 at 9:00 AM IST daily.\n\n` +
+      `Use /daily to disable.`,
+      getMainMenu(ctx.chat.id)
+    ).catch(() => {});
+  } else {
+    await ctx.replyWithMarkdown(
+      `🌙 *Daily Digest Disabled*\n\n` +
+      `You won't receive automatic daily messages.\n\n` +
+      `Use /daily to re-enable anytime.`,
+      getMainMenu(ctx.chat.id)
+    ).catch(() => {});
+  }
 });
 
 export { bot, customQueries, getShortVideoId, videoDownloadUrls };

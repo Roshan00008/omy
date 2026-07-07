@@ -8,12 +8,20 @@
     {
       "src": "/api/digest",
       "dest": "/api/digest.js"
+    },
+    {
+      "src": "/api/autosend",
+      "dest": "/api/autosend.js"
     }
   ],
   "crons": [
     {
       "path": "/api/digest",
       "schedule": "0 3 * * *"
+    },
+    {
+      "path": "/api/autosend",
+      "schedule": "30 3 * * *"
     }
   ]
 }
