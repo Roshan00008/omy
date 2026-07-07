@@ -1,5 +1,15 @@
 {
   "version": 2,
+  "buildCommand": "echo 'No build step'",
+  "devCommand": "node bot.js",
+  "installCommand": "npm install",
+  "framework": null,
+  "functions": {
+    "api/**/*.js": {
+      "maxDuration": 30,
+      "runtime": "nodejs18.x"
+    }
+  },
   "routes": [
     {
       "src": "/api/webhook",

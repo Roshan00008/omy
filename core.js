@@ -6,6 +6,8 @@ import os from 'os';
 import path from 'path';
 import {
   scrapeDesiPorn,
+  scrapeMMSBee,
+  scrapeDesiPapa,
   scrapeViralMms,
   scrapeDesiSexVdo,
   scrapeDesiBabe,
@@ -222,7 +224,8 @@ function getMainMenu(chatId) {
       Markup.button.callback('🌟 Popular (All-in-One)', 'scrape_popular_all_in_one_1')
     ],
     // Individual Sites
-    [Markup.button.callback('DesiPorn 🔥', 'site_desiporn'), Markup.button.callback('ViralMMS 🎬', 'site_viralmms')],
+    [Markup.button.callback('DesiPorn 🔥', 'site_desiporn'), Markup.button.callback('MMSBee 🐝', 'site_mmsbee')],
+    [Markup.button.callback('DesiPapa 🎬', 'site_desipapa'), Markup.button.callback('ViralMMS 🎬', 'site_viralmms')],
     [Markup.button.callback('DesiSexVdo 🎥', 'site_desisexvdo'), Markup.button.callback('DesiBabe 🍑', 'site_desibabe')],
     [Markup.button.callback('DesiHub 🇮🇳', 'site_desihub'), Markup.button.callback('DesiBF 💋', 'site_desibf')],
     [Markup.button.callback('DesiLeak49 💦', 'site_desileak49'), Markup.button.callback('MastiRaja 🍿', 'site_mastiraja')],
@@ -373,6 +376,8 @@ bot.action('toggle_autodelete', async (ctx) => {
 
 // Setup site triggers to load page selectors
 bot.action('site_desiporn', (ctx) => sendPageSelector(ctx, 'DesiPorn', 'desiporn'));
+bot.action('site_mmsbee', (ctx) => sendPageSelector(ctx, 'MMSBee', 'mmsbee'));
+bot.action('site_desipapa', (ctx) => sendPageSelector(ctx, 'DesiPapa', 'desipapa'));
 bot.action('site_viralmms', (ctx) => sendPageSelector(ctx, 'ViralMMS', 'viralmms'));
 bot.action('site_desisexvdo', (ctx) => sendPageSelector(ctx, 'DesiSexVdo', 'desisexvdo'));
 bot.action('site_desibabe', (ctx) => sendPageSelector(ctx, 'DesiBabe', 'desibabe'));
@@ -704,6 +709,12 @@ bot.action(/^scrape_([a-z0-9_]+)_(\d+)$/, async (ctx) => {
   } else if (siteKey === 'desileak49') {
     siteName = 'DesiLeak49';
     scrapeFn = scrapeDesiLeak49;
+  } else if (siteKey === 'mmsbee') {
+    siteName = 'MMSBee';
+    scrapeFn = scrapeMMSBee;
+  } else if (siteKey === 'desipapa') {
+    siteName = 'DesiPapa';
+    scrapeFn = scrapeDesiPapa;
   } else if (siteKey === 'mastiraja') {
     siteName = 'MastiRaja';
     scrapeFn = scrapeMastiRaja;
@@ -716,7 +727,7 @@ bot.action(/^scrape_([a-z0-9_]+)_(\d+)$/, async (ctx) => {
   }
 });
 
-const validSitesPattern = 'all|desiporn|viralmms|desisexvdo|desibabe|desihub|desibf|desileak49|mastiraja|trending_all_in_one|popular_all_in_one';
+const validSitesPattern = 'all|desiporn|mmsbee|desipapa|viralmms|desisexvdo|desibabe|desihub|desibf|desileak49|mastiraja|trending_all_in_one|popular_all_in_one';
 
 // Register generic tag search handler
 bot.action(new RegExp('^search_(' + validSitesPattern + ')_(.+)_(\\d+)$'), async (ctx) => {
@@ -786,6 +797,12 @@ bot.action(new RegExp('^csearch_(' + validSitesPattern + ')_(.+)_(\\d+)$'), asyn
   } else if (siteKey === 'desileak49') {
     siteName = 'DesiLeak49';
     scrapeFn = scrapeDesiLeak49;
+  } else if (siteKey === 'mmsbee') {
+    siteName = 'MMSBee';
+    scrapeFn = scrapeMMSBee;
+  } else if (siteKey === 'desipapa') {
+    siteName = 'DesiPapa';
+    scrapeFn = scrapeDesiPapa;
   } else if (siteKey === 'mastiraja') {
     siteName = 'MastiRaja';
     scrapeFn = scrapeMastiRaja;
